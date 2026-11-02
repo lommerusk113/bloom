@@ -172,15 +172,20 @@ const server = createServer((req, res) => {
 const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 })
 
 server.on('upgrade', (req, socket, head) => {
-    const match = /^\/ws\/([\w-]+)$/.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
-    const room = match ? rooms.get(match[1]) : undefined
-    // cross-site websocket hijacking: browsers always send Origin, so a foreign one means another site's page
-    const origin = req.headers.origin
-    if (!room || (origin !== undefined && URL.parse(origin)?.host !== req.headers.host)) {
+    try {
+        const match = /^\/ws\/([\w-]+)$/.exec(URL.parse(req.url ?? '/', 'http://localhost')?.pathname ?? '')
+        const room = match ? rooms.get(match[1]) : undefined
+        // cross-site websocket hijacking: browsers always send Origin, so a foreign one means another site's page
+        const origin = req.headers.origin
+        if (!room || (origin !== undefined && URL.parse(origin)?.host !== req.headers.host)) {
+            socket.destroy()
+            return
+        }
+        wss.handleUpgrade(req, socket, head, ws => onJoin(ws, room, auth.isHost(req)))
+    } catch (err) {
+        console.error('Upgrade failed:', (err as Error).message)
         socket.destroy()
-        return
     }
-    wss.handleUpgrade(req, socket, head, ws => onJoin(ws, room, auth.isHost(req)))
 })
 
 function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
@@ -327,6 +332,10 @@ async function checkJellyfin(): Promise<void> {
         }
     }
 }
+
+// rooms live in memory only: log a missed error path rather than lose every room
+process.on('uncaughtException', err => console.error('Uncaught:', err))
+process.on('unhandledRejection', err => console.error('Unhandled rejection:', err))
 
 checkJellyfin()
 setInterval(checkJellyfin, 30_000)

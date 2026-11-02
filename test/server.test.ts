@@ -2,6 +2,7 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
+import { connect } from 'node:net'
 import WebSocket from 'ws'
 
 const PORT = 18_000 + Math.floor(Math.random() * 1000)
@@ -112,5 +113,13 @@ test('an oversized websocket frame drops only that client', async () => {
     await once(ws, 'open')
     ws.send('x'.repeat(70_000))
     await once(ws, 'close')
+    assert.equal((await fetch(`${BASE}/api/health`)).status, 200)
+})
+
+test('a malformed upgrade target does not crash the server', async () => {
+    const socket = connect(PORT, '127.0.0.1')
+    await once(socket, 'connect')
+    socket.end('GET http://[::1 HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n')
+    await once(socket, 'close')
     assert.equal((await fetch(`${BASE}/api/health`)).status, 200)
 })
