@@ -66,6 +66,11 @@ function onMessage(msg) {
         $('status').textContent = msg.message
         return
     }
+    if (msg.type === 'gone') {
+        unloadStream()
+        $('status').textContent = 'This room no longer exists'
+        return
+    }
     if (msg.type !== 'state') {
         return
     }
@@ -73,15 +78,7 @@ function onMessage(msg) {
     const item = state.room.queue[state.room.index]
     if (!item && current) {
         // queue emptied: drop the removed item's stream before the proxy starts refusing it
-        loadToken++ // cancels pending retries and in-flight loads
-        hls?.destroy()
-        hls = null
-        if (current.source) {
-            stopStream(roomId, current.source.TranscodingUrl)
-        }
-        video.removeAttribute('src')
-        video.load()
-        current = null
+        unloadStream()
         $('status').textContent = ''
     }
     if (item && current?.itemId !== item.id) {
@@ -94,6 +91,18 @@ function onMessage(msg) {
 }
 
 // --- loading streams ---
+
+function unloadStream() {
+    loadToken++ // cancels pending retries and in-flight loads
+    hls?.destroy()
+    hls = null
+    if (current?.source) {
+        stopStream(roomId, current.source.TranscodingUrl)
+    }
+    video.removeAttribute('src')
+    video.load()
+    current = null
+}
 
 const findSub = (source, index) => source?.MediaStreams.find(m => m.Type === 'Subtitle' && m.Index === index)
 const isImageSub = (source, index) => Boolean(findSub(source, index) && !findSub(source, index).IsTextSubtitleStream)

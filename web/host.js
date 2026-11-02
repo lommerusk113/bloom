@@ -85,6 +85,8 @@ function manage() {
             $('status').textContent = ''
         } else if (msg.type === 'error') {
             $('status').textContent = msg.message
+        } else if (msg.type === 'gone') {
+            $('status').textContent = 'This room no longer exists'
         } else if (msg.type === 'state') {
             render(msg)
         }

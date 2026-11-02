@@ -133,6 +133,12 @@ test('an oversized websocket frame drops only that client', async () => {
     assert.equal((await fetch(`${BASE}/api/health`)).status, 200)
 })
 
+test('a socket to an unknown room is closed with 4404', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/no-such-room`)
+    const [code] = await once(ws, 'close')
+    assert.equal(code, 4404)
+})
+
 test('a malformed upgrade target does not crash the server', async () => {
     const socket = connect(PORT, '127.0.0.1')
     await once(socket, 'connect')

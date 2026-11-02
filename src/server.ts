@@ -212,7 +212,16 @@ server.on('upgrade', (req, socket, head) => {
         const origin = req.headers.origin
         // a reverse proxy may rewrite Host, so PUBLIC_URL's host counts as same-site too
         const originHost = origin === undefined ? undefined : URL.parse(origin)?.host
-        if (!room || (origin !== undefined && originHost !== req.headers.host && originHost !== PUBLIC_HOST) || (clients.get(room.id)?.size ?? 0) >= MAX_CLIENTS_PER_ROOM) {
+        if (!match || (origin !== undefined && originHost !== req.headers.host && originHost !== PUBLIC_HOST)) {
+            socket.destroy()
+            return
+        }
+        if (!room) {
+            // a close code, unlike a refused upgrade, tells clients of a deleted room to stop reconnecting
+            wss.handleUpgrade(req, socket, head, ws => ws.close(4404, 'Room not found'))
+            return
+        }
+        if ((clients.get(room.id)?.size ?? 0) >= MAX_CLIENTS_PER_ROOM) {
             socket.destroy()
             return
         }
