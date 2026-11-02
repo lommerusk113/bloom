@@ -5,14 +5,18 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      # Coolify generates the domain and routes it to port 8080
+      # Coolify domain: leave PUBLIC_URL empty and set the domain on the service (fills SERVICE_FQDN_BLOOM_8080).
+      # Own proxy (Pangolin, nginx...): set PUBLIC_URL to the public address, e.g. https://bloom.example.com
       SERVICE_FQDN_BLOOM_8080:
-      PUBLIC_URL: ${SERVICE_FQDN_BLOOM_8080}
+      PUBLIC_URL: ${PUBLIC_URL:-${SERVICE_FQDN_BLOOM_8080}}
       JELLYFIN_URL: ${JELLYFIN_URL:?Jellyfin address, e.g. http://jellyfin:8096}
       JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:?Jellyfin Dashboard > API Keys}
       HOST_PASSWORD: ${HOST_PASSWORD:?Password for the host page}
       JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+    # for a proxy outside Docker (Pangolin's Newt, nginx): http://<server>:HOST_PORT
+    ports:
+      - "${HOST_PORT:-8765}:8080"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/health"]
       interval: 30s

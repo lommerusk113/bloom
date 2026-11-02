@@ -47,6 +47,8 @@ Bloom never encodes video itself. Every guest gets an HLS stream from Jellyfin (
 2. Under **Environment Variables**, fill in `JELLYFIN_URL`, `JELLYFIN_API_KEY` and `HOST_PASSWORD` (required), and optionally `TMDB_API_KEY` and `JELLYFIN_USER_ID`.
 3. Set the domain for the `bloom` service (Coolify fills `SERVICE_FQDN_BLOOM_8080`, which also becomes `PUBLIC_URL`) and deploy.
 
+Behind **Pangolin** (or another proxy outside Coolify) skip the Coolify domain: set `PUBLIC_URL` to the public address and point the proxy at `http://<server-ip>:8765` (`HOST_PORT` changes 8765). In Pangolin turn off authentication for the resource, or guests get a Pangolin login instead of Bloom.
+
 `JELLYFIN_URL` must be reachable from the Bloom container: if Jellyfin runs on the same server outside Coolify, use its public URL or the host's LAN address, not `localhost`.
 
 ## Using it
