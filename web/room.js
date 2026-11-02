@@ -12,7 +12,7 @@ let socket = null
 let cast = null
 let state = null      // last 'state' message
 let isHost = false
-let current = null    // { itemId, source } of the loaded stream; source null while loading
+let current = null    // { itemId, source, last } of the loaded stream; source null while loading, last is the item's previous source
 let loadToken = 0
 let retry = { itemId: null, delay: 0 } // backoff for consecutive load failures of one item
 let hls = null
@@ -89,7 +89,7 @@ function subtitleParam() {
     if (prefs.subs === null) {
         return null // let Jellyfin pick its default
     }
-    return isImageSub(current?.source, prefs.subs) ? prefs.subs : -1 // text subs are drawn by the browser
+    return isImageSub(current?.source ?? current?.last, prefs.subs) ? prefs.subs : -1 // text subs are drawn by the browser
 }
 
 function currentTarget() {
@@ -105,7 +105,7 @@ async function load(itemId) {
         hls = null
         stopStream(roomId, current.source.TranscodingUrl)
     }
-    current = { itemId, source: null }
+    current = { itemId, source: null, last: current?.itemId === itemId ? (current.source ?? current.last) : null }
     $('status').textContent = 'Loading…'
     try {
         const source = await playbackInfo(roomId, itemId, deviceProfile(video, safeItem === itemId), { deviceId, audio: prefs.audio, subs, bitrate: prefs.bitrate })
@@ -234,7 +234,8 @@ $('audio').onchange = () => {
 $('subs').onchange = () => {
     const previous = prefs.subs
     prefs.subs = Number($('subs').value)
-    if (isImageSub(current.source, previous) || isImageSub(current.source, prefs.subs)) {
+    const source = current.source ?? current.last
+    if (isImageSub(source, previous) || isImageSub(source, prefs.subs)) {
         load(current.itemId)
     } else {
         showSubtitles()
