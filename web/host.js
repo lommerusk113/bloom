@@ -159,7 +159,7 @@ function manage(room) {
             state = msg
             render()
         }
-    })
+    }, true)
 
     $('toggle').onclick = () => command({ type: state.room.playing ? 'pause' : 'play' })
     $('next').onclick = () => command({ type: 'next' })

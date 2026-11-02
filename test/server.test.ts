@@ -2,13 +2,23 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { request, type IncomingMessage } from 'node:http'
+import { createServer, request, type IncomingMessage } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { connect } from 'node:net'
 import WebSocket from 'ws'
 
 const PORT = 18_000 + Math.floor(Math.random() * 1000)
 const BASE = `http://127.0.0.1:${PORT}`
 let server: ChildProcess
+const MOVIE = 'a'.repeat(32)
+/** Fails /System/Info (so the startup check reports an error) but lists one movie, enough to queue it. */
+const fakeJellyfin = createServer((req, res) => {
+    if (req.url?.startsWith('/Items?')) {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ Items: [{ Id: MOVIE, Name: 'Movie', Type: 'Movie', RunTimeTicks: 36_000_000_000 }] }))
+        return
+    }
+    res.writeHead(503).end()
+})
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -28,8 +38,10 @@ async function waitFor<T>(probe: () => Promise<T | undefined>): Promise<T> {
 }
 
 before(async () => {
+    await new Promise<void>(resolve => fakeJellyfin.listen(0, '127.0.0.1', resolve))
+    const jellyfinUrl = `http://127.0.0.1:${(fakeJellyfin.address() as AddressInfo).port}`
     server = spawn(process.execPath, ['src/server.ts'], {
-        env: { ...process.env, PORT: String(PORT), JELLYFIN_URL: 'http://127.0.0.1:9', JELLYFIN_API_KEY: 'x', HOST_PASSWORD: 'pw', PUBLIC_URL: BASE },
+        env: { ...process.env, PORT: String(PORT), JELLYFIN_URL: jellyfinUrl, JELLYFIN_API_KEY: 'x', HOST_PASSWORD: 'pw', PUBLIC_URL: BASE },
         stdio: 'ignore',
     })
     await waitFor(async () => ((await fetch(`${BASE}/api/health`)).ok ? true : undefined))
@@ -37,6 +49,7 @@ before(async () => {
 
 after(() => {
     server.kill()
+    fakeJellyfin.close()
 })
 
 async function login(): Promise<string> {
@@ -175,6 +188,26 @@ test('a room password keeps out guests until they enter it', async () => {
     assert.equal(rooms.find(r => r.id === id)?.password, 'open sesame')
     assert.equal((await setPassword('')).status, 200)
     assert.deepEqual(await access(), { locked: false, allowed: true })
+})
+
+test('a buffering viewer holds a playing room until it has loaded', async () => {
+    const cookie = await login()
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
+    const host = openSocket(id, cookie)
+    const guest = openSocket(id)
+    await Promise.all([host.ready, guest.ready])
+    guest.send({ type: 'hello', name: 'Slow' })
+    host.send({ type: 'addItem', itemId: MOVIE })
+    await host.next(m => m.type === 'state' && m.room.queue.length === 1)
+    host.send({ type: 'cmd', cmd: { type: 'play' } })
+    await host.next(m => m.type === 'state' && m.room.playing)
+    guest.send({ type: 'buffering', value: true })
+    const held = await host.next(m => m.type === 'state' && m.room.waiting)
+    assert.deepEqual(held.waitingFor, ['Slow'])
+    guest.send({ type: 'buffering', value: false })
+    await host.next(m => m.type === 'state' && m.room.playing && !m.room.waiting && m.serverNow > held.serverNow)
+    host.close()
+    guest.close()
 })
 
 test('a malformed upgrade target does not crash the server', async () => {

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { advanceIfEnded, apply, createRoom, currentPosition, parseCommand, sweepRooms, type QueueItem, type Room } from '../src/room.ts'
+import { setWaiting, advanceIfEnded, apply, createRoom, currentPosition, parseCommand, sweepRooms, type QueueItem, type Room } from '../src/room.ts'
 
 const A: QueueItem = { id: 'a'.repeat(32), name: 'A', runtime: 100 }
 const B: QueueItem = { id: 'b'.repeat(32), name: 'B', runtime: 200 }
@@ -129,4 +129,14 @@ test('sweepRooms reports rooms whose item ended', () => {
     const { advanced } = sweepRooms(new Map([[room.id, room]]), () => 1, new Map(), 100_000)
     assert.deepEqual(advanced, [room])
     assert.equal(room.index, 1)
+})
+
+test('a waiting room holds its position until released', () => {
+    const room = roomWith()
+    apply(room, { type: 'play' }, true, 0)
+    assert.equal(setWaiting(room, true, 10_000), true)
+    assert.equal(setWaiting(room, true, 11_000), false)
+    assert.equal(currentPosition(room, 20_000), 10)
+    setWaiting(room, false, 20_000)
+    assert.equal(currentPosition(room, 25_000), 15)
 })

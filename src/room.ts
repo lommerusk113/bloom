@@ -8,6 +8,8 @@ export type Room = {
     position: number
     updatedAt: number
     guestControl: boolean
+    /** Playing, but held still until buffering viewers catch up. */
+    waiting: boolean
 }
 
 export type Command =
@@ -25,11 +27,22 @@ const ROOM_TTL_MS = 30 * 60_000
 const HOST_ONLY: ReadonlySet<Command['type']> = new Set(['queueAdd', 'queueRemove', 'queueMove', 'setGuestControl'])
 
 export function createRoom(id: string, now: number): Room {
-    return { id, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true }
+    return { id, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true, waiting: false }
 }
 
 export function currentPosition(room: Room, now: number): number {
-    return room.position + (room.playing ? (now - room.updatedAt) / 1000 : 0)
+    return room.position + (room.playing && !room.waiting ? (now - room.updatedAt) / 1000 : 0)
+}
+
+/** Holds or releases a playing room for buffering viewers; true when that changed. */
+export function setWaiting(room: Room, waiting: boolean, now: number): boolean {
+    if (room.waiting === waiting) {
+        return false
+    }
+    room.position = currentPosition(room, now)
+    room.updatedAt = now
+    room.waiting = waiting
+    return true
 }
 
 /** Applies a command if the sender may. Mutates the room; returns false when rejected or invalid. */

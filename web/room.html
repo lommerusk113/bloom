@@ -24,11 +24,13 @@
         <video id="video" playsinline></video>
         <button id="tap" hidden>▶ Tap to start</button>
         <p id="status"></p>
+        <div id="spinner" class="spinner" hidden></div>
         <div class="osd">
             <header class="osd-top">
                 <div>
                     <div id="title" class="osd-title">Waiting for the host to pick something…</div>
                     <div id="lock" class="osd-sub" hidden>Only the host can control playback</div>
+                    <div id="wait" class="osd-sub"></div>
                 </div>
                 <div id="viewers" class="chips"></div>
             </header>

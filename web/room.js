@@ -23,6 +23,7 @@ let seekLead = 1        // seconds to seek past the target, learned from how far
 let pendingSeek = false // a seek while playing whose landing drift hasn't been measured yet
 let lastSeekedAt = 0
 let stalled = false     // buffering: currentTime frozen while not seeking
+let myName = ''
 
 function recall(key) {
     try {
@@ -47,10 +48,20 @@ $('name').value = recall('wp_name') ?? ''
 fetch(`/api/rooms/${roomId}/access`).then(res => res.json()).then(({ locked, allowed }) => {
     $('password').hidden = !(locked && !allowed)
     $('password').required = locked && !allowed
+    if ($('password').hidden && $('name').value) {
+        join() // remembered name and no password to type: straight in; "Tap to start" covers blocked autoplay
+    }
 }).catch(() => {}) // unknown room: the socket reports it as gone
 
-$('join').onsubmit = async (event) => {
+$('join').onsubmit = (event) => {
     event.preventDefault()
+    join()
+}
+
+async function join() {
+    if (socket) {
+        return // auto-join and a click can race
+    }
     if (!$('password').hidden) {
         const res = await fetch(`/api/rooms/${roomId}/join`, {
             method: 'POST',
@@ -62,7 +73,11 @@ $('join').onsubmit = async (event) => {
             return
         }
     }
+    if (socket) {
+        return
+    }
     const name = $('name').value.trim()
+    myName = name.slice(0, 32) || 'Guest'
     store('wp_name', name)
     $('join').hidden = true
     $('player').hidden = false
@@ -75,6 +90,7 @@ $('join').onsubmit = async (event) => {
 function onMessage(msg) {
     if (msg.type === 'welcome') {
         isHost = msg.isHost
+        reportedBuffering = false // a new connection starts out not buffering on the server
         $('endRoom').hidden = !isHost
         $('status').textContent = ''
         return
@@ -127,6 +143,7 @@ function unloadStream() {
     if (current?.source) {
         stopStream(roomId, current.source.TranscodingUrl)
     }
+    clearSubtitles()
     video.removeAttribute('src')
     video.load()
     current = null
@@ -155,8 +172,10 @@ async function load(itemId) {
         hls = null
         stopStream(roomId, current.source.TranscodingUrl)
     }
+    if (current?.itemId !== itemId) {
+        clearSubtitles() // the previous item's subtitles must not show over this one
+    }
     current = { itemId, source: null, last: current?.itemId === itemId ? (current.source ?? current.last) : null }
-    $('status').textContent = 'Loading…'
     try {
         const source = await playbackInfo(roomId, itemId, deviceProfile(video, safeItem === itemId), { deviceId, audio: prefs.audio, subs, bitrate: prefs.bitrate })
         if (token !== loadToken) {
@@ -246,10 +265,15 @@ function recoverMedia() {
     }
 }
 
-function showSubtitles() {
+function clearSubtitles() {
     for (const track of video.querySelectorAll('track')) {
+        track.track.mode = 'disabled' // a removed <track> can keep rendering in some browsers
         track.remove()
     }
+}
+
+function showSubtitles() {
+    clearSubtitles()
     const { itemId, source } = current
     const stream = findSub(source, prefs.subs)
     if (!stream?.IsTextSubtitleStream) {
@@ -447,17 +471,35 @@ function isBuffered(time) {
     return false
 }
 
+let reportedBuffering = false
+
+/** Tells the room this player is loading, so it waits instead of running ahead. */
+function reportBuffering(buffering) {
+    $('spinner').hidden = !buffering
+    if (buffering !== reportedBuffering) {
+        reportedBuffering = buffering
+        socket.send({ type: 'buffering', value: buffering })
+    }
+}
+
 function syncNow() {
     if (!state) {
         return
     }
     const { room } = state
+    const playing = room.playing && !room.waiting
     const runtime = room.queue[room.index]?.runtime ?? 0
     const target = currentTarget()
+    const local = !cast?.active() && current?.source && video.readyState > 0
+    reportBuffering(Boolean(room.queue[room.index]) && !cast?.active() && (!local || video.seeking || stalled || video.readyState < 3))
+    const waitingFor = state.waitingFor.filter(name => name !== myName)
+    $('wait').textContent = room.waiting ? `Waiting for ${waitingFor.join(', ') || 'you'} to load…` : ''
+    // the counter shows this player's own position, so it stops while it loads
+    const position = local && !video.seeking ? video.currentTime : target
     if (!dragging) {
-        $('seek').value = String(Math.floor(target))
+        $('seek').value = String(Math.floor(position))
     }
-    const shown = dragging ? Number($('seek').value) : target
+    const shown = dragging ? Number($('seek').value) : position
     $('elapsed').textContent = clock(shown)
     $('duration').textContent = clock(runtime)
     $('seek').style.setProperty('--pct', `${runtime ? Math.min(100, (shown / runtime) * 100) : 0}%`)
@@ -472,10 +514,10 @@ function syncNow() {
     if (!current?.source || video.readyState === 0 || video.seeking) {
         return
     }
-    if (room.playing && video.paused && !video.ended) {
+    if (playing && video.paused && !video.ended) {
         video.play().then(() => { $('tap').hidden = true }).catch(() => { $('tap').hidden = false })
     }
-    if (!room.playing && !video.paused) {
+    if (!playing && !video.paused) {
         video.pause()
     }
     if (stalled) {
@@ -486,12 +528,12 @@ function syncNow() {
         seekLead = adaptLead(seekLead, drift)
         pendingSeek = false
     }
-    const d = decide(drift, room.playing)
+    const d = decide(drift, playing)
     if (d.action === 'seek') {
         if (Date.now() - lastSeekedAt < 4000) {
             return // let the last seek settle before judging it
         }
-        const far = room.playing && !isBuffered(target) // buffered seeks land instantly: no lead, nothing to learn
+        const far = playing && !isBuffered(target) // buffered seeks land instantly: no lead, nothing to learn
         video.currentTime = Math.min(target + (far ? seekLead : 0), runtime || Infinity)
         pendingSeek = far
     }

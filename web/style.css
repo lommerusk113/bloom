@@ -118,3 +118,6 @@ google-cast-launcher { display: inline-block; width: 26px; height: 26px; margin:
 .tile:hover, .tile:hover:not(:disabled) { border: none; }
 .more { display: block; margin: 14px auto 0; }
 @media (max-width: 480px) { .catalogue { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); } .tile.wide { grid-column: span 2; } }
+.spinner { position: absolute; z-index: 3; width: 56px; height: 56px; border-radius: 50%; border: 4px solid rgb(255 255 255 / .2); border-top-color: var(--accent); animation: spin .8s linear infinite; pointer-events: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#wait:empty { display: none; }

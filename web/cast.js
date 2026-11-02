@@ -111,7 +111,8 @@ export function setupCast({ roomId, deviceId, getState }) {
 
         /** Called every second by the player while casting. Seeks only: the Default Receiver has no playback rate. */
         sync(target) {
-            const { room } = getState()
+            const { room: shared } = getState()
+            const room = { ...shared, playing: shared.playing && !shared.waiting } // held for buffering viewers: stand still
             const item = room.queue[room.index]
             if (!item) {
                 // queue emptied: stop the receiver and its transcode, drop any in-flight load

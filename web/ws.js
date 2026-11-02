@@ -4,7 +4,7 @@ import { median, nextBackoff } from './sync.js'
  * Reconnecting websocket to a room. onMessage gets every server message except clock pongs,
  * { type: 'gone' } once the room is deleted and { type: 'locked' } when it needs a password this browser lacks.
  */
-export function connectRoom(roomId, name, onMessage) {
+export function connectRoom(roomId, name, onMessage, observer = false) {
     const samples = []
     let ws = null
     let delay = 0 // reconnect backoff, 0 while connected
@@ -24,7 +24,7 @@ export function connectRoom(roomId, name, onMessage) {
         ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${roomId}`)
         ws.onopen = () => {
             delay = 0
-            socket.send({ type: 'hello', name })
+            socket.send({ type: 'hello', name, observer })
             for (let i = 0; i < 5; i++) {
                 setTimeout(ping, i * 200)
             }

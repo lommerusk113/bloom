@@ -6,7 +6,7 @@ export const MAX_SEEK_LEAD = 5
 
 /** Room position in seconds at the given server time. */
 export function targetPosition(room, serverNow) {
-    return room.position + (room.playing ? (serverNow - room.updatedAt) / 1000 : 0)
+    return room.position + (room.playing && !room.waiting ? (serverNow - room.updatedAt) / 1000 : 0)
 }
 
 /**

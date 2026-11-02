@@ -6,10 +6,10 @@ import WebSocket, { WebSocketServer } from 'ws'
 import { createAuth } from './auth.ts'
 import { createJellyfin } from './jellyfin.ts'
 import { proxyRequest, readBody, stopRoomStreams } from './proxy.ts'
-import { apply, createRoom, parseCommand, sweepRooms, type Room } from './room.ts'
+import { apply, createRoom, parseCommand, setWaiting, sweepRooms, type Room } from './room.ts'
 
-/** windowStart/count/strikes: websocket rate limit state, see overLimit. */
-type Client = { ws: WebSocket; name: string; isHost: boolean; windowStart: number; count: number; strikes: number }
+/** windowStart/count/strikes: websocket rate limit state, see overLimit. bufferingSince: 0 unless the client's player is loading. */
+type Client = { ws: WebSocket; name: string; isHost: boolean; observer: boolean; windowStart: number; count: number; strikes: number; bufferingSince: number }
 
 const alive = new WeakSet<WebSocket>()
 
@@ -19,6 +19,8 @@ const MAX_CLIENTS_PER_ROOM = 50
 /** A client this far behind on reading is dropped rather than buffering every state for it. */
 const MAX_BUFFERED_BYTES = 1_000_000
 const BROADCAST_DELAY_MS = 50
+/** A viewer buffering longer than this no longer holds the room, so one bad connection can't stop everyone. */
+const MAX_WAIT_MS = 15_000
 const WEB_DIR = join(import.meta.dirname, '..', 'web')
 const HLS_JS = join(import.meta.dirname, '..', 'node_modules', 'hls.js', 'dist', 'hls.min.js')
 const CONTENT_TYPES: Record<string, string> = {
@@ -53,9 +55,22 @@ function required(name: string): string {
 
 // --- room state fan-out ---
 
+function blockers(room: Room, now: number): Client[] {
+    return [...(clients.get(room.id) ?? [])].filter(c => c.bufferingSince > 0 && now - c.bufferingSince < MAX_WAIT_MS)
+}
+
+/** Holds a playing room while a viewer buffers; broadcasts when that changes. */
+function updateWaiting(room: Room, now = Date.now()): void {
+    if (setWaiting(room, room.playing && blockers(room, now).length > 0, now)) {
+        broadcast(room)
+    }
+}
+
 function stateMessage(room: Room): string {
-    const viewers = [...(clients.get(room.id) ?? [])].map(c => c.name)
-    return JSON.stringify({ type: 'state', room, viewers, serverNow: Date.now() })
+    const now = Date.now()
+    const viewers = [...(clients.get(room.id) ?? [])].filter(c => !c.observer).map(c => c.name)
+    const waitingFor = room.waiting ? blockers(room, now).map(c => c.name) : []
+    return JSON.stringify({ type: 'state', room, viewers, waitingFor, serverNow: now })
 }
 
 /** Every websocket send goes through here so a client that stops reading is dropped, not buffered for. */
@@ -115,7 +130,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 }
 
 function roomSummary(room: Room) {
-    return { id: room.id, title: room.queue[room.index]?.name ?? 'Empty room', viewers: clients.get(room.id)?.size ?? 0, password: locks.get(room.id)?.password ?? '' }
+    return { id: room.id, title: room.queue[room.index]?.name ?? 'Empty room', viewers: [...(clients.get(room.id) ?? [])].filter(c => !c.observer).length, password: locks.get(room.id)?.password ?? '' }
 }
 
 /** The host, anyone in a room without a password, or a guest who entered it. */
@@ -327,7 +342,7 @@ server.on('upgrade', (req, socket, head) => {
 
 function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
 
-    const client: Client = { ws, name: 'Guest', isHost, windowStart: 0, count: 0, strikes: 0 }
+    const client: Client = { ws, name: 'Guest', isHost, observer: false, windowStart: 0, count: 0, strikes: 0, bufferingSince: 0 }
     const set = clients.get(room.id) ?? new Set<Client>()
     clients.set(room.id, set)
     set.add(client)
@@ -362,6 +377,7 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
 
     ws.on('close', () => {
         set.delete(client)
+        updateWaiting(room)
         broadcast(room)
     })
 }
@@ -395,12 +411,30 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
     const now = Date.now()
     switch (msg.type) {
         case 'hello': {
+            // the host page watches the room without being a viewer in it
+            const observer = msg.observer === true && client.isHost
+            if (observer !== client.observer) {
+                client.observer = observer
+                broadcast(room)
+            }
             const name = String(msg.name ?? '').trim().slice(0, 32) || 'Guest'
             if (name === client.name) {
                 return
             }
             client.name = name
             break
+        }
+        case 'buffering': {
+            const buffering = msg.value === true
+            if (buffering === client.bufferingSince > 0) {
+                return
+            }
+            client.bufferingSince = buffering ? now : 0
+            updateWaiting(room, now)
+            if (room.waiting) {
+                broadcast(room) // waitingFor changed
+            }
+            return
         }
         case 'ping':
             send(client, JSON.stringify({ type: 'pong', t0: Number(msg.t0) || 0, server: now }))
@@ -411,6 +445,7 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
                 send(client, stateMessage(room)) // rejected: resync the sender
                 return
             }
+            updateWaiting(room, now)
             break
         }
         case 'addItem':
@@ -431,6 +466,9 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
 setInterval(() => {
     const { advanced, deleted } = sweepRooms(rooms, id => clients.get(id)?.size ?? 0, emptySince, Date.now())
     advanced.forEach(broadcast)
+    for (const room of rooms.values()) {
+        updateWaiting(room) // releases rooms whose blockers hit MAX_WAIT_MS
+    }
     for (const id of deleted) {
         clients.delete(id)
         locks.delete(id)
