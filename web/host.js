@@ -211,6 +211,7 @@ function selectTab(id) {
 
 function clearBrowse() {
     browseToken++
+    $('hero').hidden = true
     $('crumbs').hidden = true
     $('filters').hidden = true
     $('rows').replaceChildren()
@@ -219,30 +220,174 @@ function clearBrowse() {
     note('')
 }
 
-/** Jellyfin-style home: a row of recently added posters per library. */
+function shelf(title, load, onTitle) {
+    const token = browseToken
+    const section = el('section', 'shelf')
+    const strip = el('div', 'strip')
+    strip.append(el('span', 'muted', 'Loading…'))
+    const page = (direction) => strip.scrollBy({ left: direction * strip.clientWidth * 0.9, behavior: 'smooth' })
+    const head = el('div', 'shelf-head')
+    head.append(
+        onTitle ? button(`${title} ›`, onTitle, { className: 'shelf-title' }) : el('h2', 'shelf-title', title),
+        button('‹', () => page(-1), { className: 'shelf-arrow', title: 'Scroll left' }),
+        button('›', () => page(1), { className: 'shelf-arrow', title: 'Scroll right' }),
+    )
+    section.append(head, strip)
+    load().then((items) => {
+        if (token === browseToken) {
+            strip.replaceChildren(...(items.length ? items.map(i => card([{ label: 'Home', back: home }], i)) : [el('span', 'muted', 'Nothing here yet')]))
+        }
+    }, () => strip.replaceChildren(el('span', 'error', 'Could not load')))
+    return section
+}
+
+/** Trakt-like home: a featured banner, TMDB trending/popular in the library, then each library's new and top rated. */
 async function home() {
     selectTab('home')
     clearBrowse()
     const token = browseToken
-    $('rows').replaceChildren(...views.map((v) => {
-        const section = el('section', 'shelf')
-        const strip = el('div', 'strip')
-        strip.append(el('span', 'muted', 'Loading…'))
-        const page = (direction) => strip.scrollBy({ left: direction * strip.clientWidth * 0.9, behavior: 'smooth' })
-        const head = el('div', 'shelf-head')
-        head.append(
-            button(`Recently added in ${v.name} ›`, () => openLibrary(v), { className: 'shelf-title' }),
-            button('‹', () => page(-1), { className: 'shelf-arrow', title: 'Scroll left' }),
-            button('›', () => page(1), { className: 'shelf-arrow', title: 'Scroll right' }),
+    const libraryShelves = views.flatMap(v => [
+        shelf(`Recently added in ${v.name}`, () => api(`/api/latest?parent=${encodeURIComponent(v.id)}`), () => openLibrary(v)),
+        shelf(`Top rated in ${v.name}`, async () => (await api(`/api/library?parent=${encodeURIComponent(v.id)}&sort=rating&start=0`)).items.slice(0, 24), () => openLibrary(v, '', 'rating')),
+    ])
+    $('rows').replaceChildren(...libraryShelves)
+    const discover = await api('/api/discover').catch(() => ({ enabled: false, shelves: [] }))
+    if (token !== browseToken) {
+        return
+    }
+    $('rows').prepend(...discover.shelves.filter(s => s.items.length).map(s => shelf(s.title, async () => s.items)))
+    const featured = discover.shelves[0]?.items[0] ?? (await api(`/api/latest?parent=${encodeURIComponent(views[0]?.id ?? '')}`).catch(() => []))[0]
+    if (featured && token === browseToken) {
+        showHero(featured.id, token)
+    }
+}
+
+async function showHero(id, token) {
+    const d = await api(`/api/details?id=${encodeURIComponent(id)}`).catch(() => null)
+    if (!d || token !== browseToken) {
+        return
+    }
+    const hero = $('hero')
+    hero.style.backgroundImage = d.backdrop ? `url(/api/image?kind=backdrop&id=${encodeURIComponent(d.id)})` : ''
+    const info = el('div', 'hero-info')
+    info.append(el('div', 'hero-kicker', 'Featured'), el('h1', 'hero-title', d.title), meta(d), el('p', 'hero-overview', d.overview))
+    info.append(actions(d))
+    hero.replaceChildren(info)
+    hero.hidden = false
+}
+
+/** Year · runtime · certification · rating line, Trakt style. */
+function meta(d) {
+    const line = el('div', 'meta')
+    const parts = [d.year, d.runtime ? `${Math.round(d.runtime / 60)} min` : '', d.certification].filter(Boolean)
+    if (d.rating) {
+        line.append(el('span', 'score', `♥ ${Math.round(d.rating * 10)}%`))
+    }
+    line.append(...parts.map(p => el('span', '', String(p))))
+    return line
+}
+
+function actions(d) {
+    const row = el('div', 'row')
+    const show = d.type === 'Series'
+    row.append(
+        button(show ? '▶ Watch from the start' : '▶ Watch now', () => {
+            socket.send({ type: 'addItem', itemId: d.id, playNow: true })
+            $('details').close()
+            showStatus(`Playing ${d.name}`, false)
+        }, { className: 'primary' }),
+        button(show ? '+ Add whole show' : '+ Add to queue', (e) => {
+            addItem(d.id)
+            e.target.textContent = '✓ Added'
+        }),
+    )
+    return row
+}
+
+/** The details popup: backdrop, poster, facts, overview, and seasons with episodes for a show. */
+async function showDetails(id) {
+    const dialog = $('details')
+    dialog.replaceChildren(el('p', 'muted', 'Loading…'))
+    dialog.showModal()
+    const d = await api(`/api/details?id=${encodeURIComponent(id)}`).catch(() => null)
+    if (!d) {
+        dialog.replaceChildren(el('p', 'error', 'Could not load details'))
+        return
+    }
+    const close = el('form', 'dialog-close')
+    close.method = 'dialog'
+    close.append(button('✕', () => {}, { title: 'Close' }))
+    const banner = el('div', 'details-banner')
+    if (d.backdrop) {
+        banner.style.backgroundImage = `url(/api/image?kind=backdrop&id=${encodeURIComponent(d.id)})`
+    }
+    const poster = el('img', 'details-poster')
+    poster.src = `/api/image?id=${encodeURIComponent(d.id)}`
+    poster.alt = ''
+    poster.onerror = () => poster.remove()
+    const body = el('div', 'details-body')
+    const text = el('div', 'details-text')
+    const genres = el('div', 'chips')
+    genres.append(...d.genres.map(g => el('span', 'chip', g)))
+    text.append(el('h2', 'details-title', d.type === 'Episode' ? d.name : d.title), meta(d), genres, el('p', '', d.overview || 'No description.'), actions(d))
+    body.append(poster, text)
+    dialog.replaceChildren(close, banner, body)
+    if (d.type === 'Series' || d.type === 'Season') {
+        dialog.append(await seasons(d))
+    }
+}
+
+async function seasons(d) {
+    const section = el('div', 'seasons')
+    const tabs = el('div', 'chips')
+    const episodes = el('ol', 'episodes')
+    section.append(tabs, episodes)
+    const list = d.type === 'Season' ? [d] : await api(`/api/children?id=${encodeURIComponent(d.id)}`).catch(() => [])
+    const open = async (season, tab) => {
+        for (const t of tabs.children) {
+            t.classList.toggle('active', t === tab)
+        }
+        episodes.replaceChildren(el('li', 'muted', 'Loading…'))
+        const items = await api(`/api/children?id=${encodeURIComponent(season.id)}`).catch(() => [])
+        episodes.replaceChildren(
+            ...items.map((e) => {
+                const row = el('li')
+                const thumb = el('img')
+                thumb.loading = 'lazy'
+                thumb.alt = ''
+                thumb.src = `/api/image?id=${encodeURIComponent(e.id)}`
+                thumb.onerror = () => thumb.replaceWith(el('span', 'thumb-empty'))
+                const label = el('div', 'grow')
+                label.append(el('strong', '', e.title), el('div', 'muted', e.subtitle.split(' · ').pop()))
+                row.append(thumb, label,
+                    button('▶', () => {
+                        socket.send({ type: 'addItem', itemId: e.id, playNow: true })
+                        $('details').close()
+                    }, { title: 'Watch now' }),
+                    button('+', (ev) => {
+                        addItem(e.id)
+                        ev.target.textContent = '✓'
+                    }, { className: 'primary', title: 'Add to queue' }))
+                return row
+            }),
+            ...(items.length ? [] : [el('li', 'muted', 'No episodes')]),
         )
-        section.append(head, strip)
-        api(`/api/latest?parent=${encodeURIComponent(v.id)}`).then((items) => {
-            if (token === browseToken) {
-                strip.replaceChildren(...(items.length ? items.map(i => card([{ label: 'Home', back: home }], i)) : [el('span', 'muted', 'Nothing yet')]))
-            }
-        }, () => strip.replaceChildren(el('span', 'error', 'Could not load')))
-        return section
-    }))
+        const addSeason = button(`+ Add all of ${season.title}`, (ev) => {
+            addItem(season.id)
+            ev.target.textContent = '✓ Added'
+        }, { className: 'link' })
+        const actionsRow = el('li', 'season-actions')
+        actionsRow.append(addSeason)
+        episodes.prepend(actionsRow)
+    }
+    list.forEach((season, i) => {
+        const tab = button(season.title, () => open(season, tab), { className: 'chip-button' })
+        tabs.append(tab)
+        if (i === 0) {
+            open(season, tab)
+        }
+    })
+    return section
 }
 
 /** A library as a poster grid, filtered by genre and sorted. */
@@ -311,9 +456,11 @@ async function loadPage(trail, level, start, token) {
 }
 
 function card(trail, i) {
-    const container = i.type === 'Series' || i.type === 'Season'
-    const tile = el('button', `tile${i.type === 'Episode' ? ' wide' : ''}`)
-    tile.title = container ? `Open ${i.name}` : `Add ${i.name} to the queue`
+    const playable = i.type === 'Movie' || i.type === 'Episode'
+    const tile = el('div', `tile${i.type === 'Episode' ? ' wide' : ''}`)
+    tile.tabIndex = 0
+    tile.role = 'button'
+    tile.title = i.name
 
     const art = el('div', 'art')
     const img = el('img')
@@ -324,24 +471,24 @@ function card(trail, i) {
         img.remove()
         art.append(el('span', 'placeholder', i.title))
     }
-    const badge = el('span', 'badge', container ? '›' : '+')
-    art.append(img, badge)
+    art.append(img)
+    if (i.rating) {
+        art.append(el('span', 'rating', `♥ ${Math.round(i.rating * 10)}%`))
+    }
+    const quick = button('+', (event) => {
+        event.stopPropagation()
+        addItem(i.id)
+        quick.textContent = '✓'
+        tile.classList.add('added')
+    }, { className: 'badge', title: playable ? 'Add to queue' : 'Add every episode to the queue' })
+    art.append(quick)
     tile.append(art, el('span', 'tile-title', i.title), el('span', 'tile-sub', i.subtitle))
 
-    tile.onclick = () => {
-        if (container) {
-            const isShow = i.type === 'Series'
-            browse([...trail, {
-                label: i.title,
-                load: list(`/api/children?id=${encodeURIComponent(i.id)}`),
-                addAll: i.id,
-                addLabel: isShow ? '+ Add whole show' : '+ Add whole season',
-            }])
-            return
+    tile.onclick = () => showDetails(i.id)
+    tile.onkeydown = (event) => {
+        if (event.key === 'Enter') {
+            showDetails(i.id)
         }
-        addItem(i.id)
-        badge.textContent = '✓'
-        tile.classList.add('added')
     }
     return tile
 }

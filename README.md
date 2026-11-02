@@ -34,6 +34,7 @@ Watchparty never encodes video itself. Every guest gets an HLS stream from Jelly
 | `JELLYFIN_USER_ID` | no | Run as this Jellyfin user (default: the first administrator); limits libraries to that user's |
 | `HOST_PASSWORD` | yes | Password for the host page |
 | `PUBLIC_URL` | behind a reverse proxy | External URL; its host is accepted as the websocket Origin and `https://` enables the Secure cookie flag |
+| `TMDB_API_KEY` | no | Free key from themoviedb.org (Settings → API); adds “Trending this week” and “Popular right now” rows for titles in your library |
 | `PORT` | no | Default `8080` |
 
 ## Using it

@@ -51,9 +51,16 @@ test('library pages through one item type and labels cards', async (t) => {
     assert.equal(query.get('SortBy'), 'DateCreated,SortName')
     assert.equal(query.get('StartIndex'), '60')
     assert.equal(page.total, 61)
-    assert.deepEqual(page.items[0], { id: 'e', name: 'Show S01E02 – Pilot', type: 'Episode', title: 'Pilot', subtitle: 'Show · S01E02' })
+    assert.deepEqual(page.items[0], { id: 'e', name: 'Show S01E02 – Pilot', type: 'Episode', title: 'Pilot', subtitle: 'Show · S01E02', rating: null })
 })
 
 test('redact removes the api key from text', () => {
     assert.equal(createJellyfin('http://jf', 'k3y').redact('a?api_key=k3y&b=k3y'), 'a?api_key=&b=')
+})
+
+test('episodes without a number get no made-up E00', async (t) => {
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ Items: [{ Id: 'e', Name: 'Pilot', Type: 'Episode', SeriesName: 'Show', ParentIndexNumber: 1 }] }))
+    const [episode] = await createJellyfin('http://jf', 'key', 'u1').children('s')
+    assert.equal(episode.subtitle, 'Show · S01')
+    assert.equal(episode.name, 'Show S01 – Pilot')
 })

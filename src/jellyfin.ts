@@ -11,6 +11,12 @@ type JfItem = {
     IndexNumber?: number
     RunTimeTicks?: number
     ProductionYear?: number
+    CommunityRating?: number
+    OfficialRating?: string
+    Genres?: string[]
+    Overview?: string
+    ProviderIds?: Record<string, string>
+    BackdropImageTags?: string[]
 }
 
 export type Jellyfin = ReturnType<typeof createJellyfin>
@@ -38,6 +44,7 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
         return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
     }
 
+    let tmdbIndex: { at: number; map: Promise<Map<string, Card>> } | null = null
     const listItems = (query: URLSearchParams) => {
         if (user) {
             query.set('userId', user)
@@ -107,8 +114,37 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
             return (await listItems(query)).Items.map(card)
         },
 
-        /** The item's poster (or episode thumbnail), resized by Jellyfin. */
-        image: (id: string) => raw(`/Items/${encodeURIComponent(id)}/Images/Primary?fillWidth=320&quality=80`),
+        /** The item's poster (or episode thumbnail), or its wide backdrop, resized by Jellyfin. */
+        image: (id: string, backdrop = false) =>
+            raw(`/Items/${encodeURIComponent(id)}/Images/${backdrop ? 'Backdrop?fillWidth=1600&quality=75' : 'Primary?fillWidth=320&quality=80'}`),
+
+        /** Everything the details popup shows about one movie, show or episode. */
+        async details(id: string): Promise<Details | null> {
+            const item = (await listItems(new URLSearchParams({ Ids: id, Fields: 'Overview,Genres' }))).Items[0]
+            if (!item) {
+                return null
+            }
+            return {
+                ...card(item),
+                year: item.ProductionYear ?? null,
+                overview: item.Overview ?? '',
+                genres: item.Genres ?? [],
+                certification: item.OfficialRating ?? '',
+                runtime: Math.round((item.RunTimeTicks ?? 0) / TICKS_PER_SECOND),
+                backdrop: (item.BackdropImageTags?.length ?? 0) > 0,
+            }
+        },
+
+        /** Library movies and shows by TMDB id ("Movie:105", "Series:1399"), to match TMDB lists. */
+        byTmdb(): Promise<Map<string, Card>> {
+            if (!tmdbIndex || Date.now() - tmdbIndex.at > INDEX_TTL_MS) {
+                const query = new URLSearchParams({ IncludeItemTypes: 'Movie,Series', Recursive: 'true', Fields: 'ProviderIds' })
+                const map = listItems(query).then(res => new Map(res.Items.filter(i => i.ProviderIds?.Tmdb).map(i => [`${i.Type}:${i.ProviderIds!.Tmdb}`, card(i)])))
+                map.catch(() => { tmdbIndex = null })
+                tmdbIndex = { at: Date.now(), map }
+            }
+            return tmdbIndex.map
+        },
 
         /** Resolves a movie/episode to itself and a series/season to its episodes in order. */
         async queueItems(id: string): Promise<QueueItem[]> {
@@ -129,6 +165,7 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
 }
 
 const PAGE = 60
+const INDEX_TTL_MS = 10 * 60_000
 const VIDEO_LIBRARIES = new Set(['movies', 'tvshows', 'mixed', 'homevideos'])
 const SORTS: Record<string, Record<string, string>> = {
     name: { SortBy: 'SortName', SortOrder: 'Ascending' },
@@ -138,20 +175,28 @@ const SORTS: Record<string, Record<string, string>> = {
 }
 
 /** What the host's catalogue shows: title, a line below it, and the full label used in the queue. */
-export type Card = { id: string; name: string; type: string; title: string; subtitle: string }
+export type Card = { id: string; name: string; type: string; title: string; subtitle: string; rating: number | null }
+
+export type Details = Card & { year: number | null; overview: string; genres: string[]; certification: string; runtime: number; backdrop: boolean }
 
 function card(i: JfItem): Card {
-    const pad = (n?: number) => String(n ?? 0).padStart(2, '0')
-    const subtitle = i.Type === 'Episode' ? `${i.SeriesName ?? ''} · S${pad(i.ParentIndexNumber)}E${pad(i.IndexNumber)}`
+    const subtitle = i.Type === 'Episode' ? [i.SeriesName, episodeCode(i)].filter(Boolean).join(' · ')
         : i.Type === 'Season' ? (i.SeriesName ?? '')
         : String(i.ProductionYear ?? '')
-    return { id: i.Id, name: label(i), type: i.Type, title: i.Name, subtitle }
+    const rating = i.CommunityRating ? Math.round(i.CommunityRating * 10) / 10 : null
+    return { id: i.Id, name: label(i), type: i.Type, title: i.Name, subtitle, rating }
+}
+
+/** S01E02; just S01 when the library lacks the episode number, never a made-up E00. */
+function episodeCode(i: JfItem): string {
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const season = i.ParentIndexNumber == null ? '' : `S${pad(i.ParentIndexNumber)}`
+    return i.IndexNumber == null ? season : `${season}E${pad(i.IndexNumber)}`
 }
 
 function label(i: JfItem): string {
-    const pad = (n?: number) => String(n ?? 0).padStart(2, '0')
     if (i.Type === 'Episode') {
-        return `${i.SeriesName} S${pad(i.ParentIndexNumber)}E${pad(i.IndexNumber)} – ${i.Name}`
+        return [i.SeriesName, episodeCode(i)].filter(Boolean).join(' ') + ` – ${i.Name}`
     }
     if (i.Type === 'Season') {
         return `${i.SeriesName} – ${i.Name}`

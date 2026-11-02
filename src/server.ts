@@ -4,7 +4,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join } from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createAuth } from './auth.ts'
-import { createJellyfin } from './jellyfin.ts'
+import { createJellyfin, type Card } from './jellyfin.ts'
+import { createTmdb, type TmdbType } from './tmdb.ts'
 import { proxyRequest, readBody, stopRoomStreams } from './proxy.ts'
 import { apply, createRoom, parseCommand, setWaiting, sweepRooms, type Room } from './room.ts'
 
@@ -35,6 +36,7 @@ const PUBLIC_HOST = new URL(PUBLIC_URL).host
 const jf = createJellyfin(required('JELLYFIN_URL').replace(/\/$/, ''), required('JELLYFIN_API_KEY'), process.env.JELLYFIN_USER_ID || undefined)
 const SECURE = PUBLIC_URL.startsWith('https:')
 const auth = createAuth(required('HOST_PASSWORD'), SECURE)
+const tmdb = process.env.TMDB_API_KEY ? createTmdb(process.env.TMDB_API_KEY) : null
 /** Room passwords, kept out of Room so they are never broadcast. */
 const locks = new Map<string, { password: string; auth: ReturnType<typeof createAuth> }>()
 
@@ -263,6 +265,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (method === 'GET' && path === '/api/latest') {
         return sendJson(res, 200, await jf.latest(param('parent')))
     }
+    if (method === 'GET' && path === '/api/details') {
+        const details = await jf.details(param('id'))
+        return details ? sendJson(res, 200, details) : sendJson(res, 404, { error: 'Not found' })
+    }
+    if (method === 'GET' && path === '/api/discover') {
+        return sendJson(res, 200, tmdb ? await discover() : { enabled: false, shelves: [] })
+    }
     if (method === 'GET' && path === '/api/genres') {
         return sendJson(res, 200, await jf.genres(param('parent')))
     }
@@ -271,7 +280,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         if (!/^[0-9a-f-]{32,36}$/i.test(id)) {
             return sendJson(res, 400, { error: 'Bad id' })
         }
-        const image = await jf.image(id)
+        const image = await jf.image(id, param('kind') === 'backdrop')
         if (!image.ok || !image.body) {
             res.writeHead(404).end()
             return
@@ -285,6 +294,25 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
 
     return sendJson(res, 404, { error: 'Not found' })
+}
+
+/** TMDB's trending and popular lists, narrowed to what the library has, movies and shows interleaved. */
+async function discover(): Promise<{ enabled: true; shelves: Array<{ title: string; items: Card[] }> }> {
+
+    const library = await jf.byTmdb()
+    const matched = async (list: (type: TmdbType) => Promise<string[]>) => {
+        const [movies, shows] = await Promise.all([list('movie').catch(() => []), list('tv').catch(() => [])])
+        const items: Card[] = []
+        for (let i = 0; i < Math.max(movies.length, shows.length); i++) {
+            const movie = library.get(`Movie:${movies[i]}`)
+            const show = library.get(`Series:${shows[i]}`)
+            items.push(...(movie ? [movie] : []), ...(show ? [show] : []))
+        }
+        return items
+    }
+    const [trending, popular] = await Promise.all([matched(tmdb!.trending), matched(tmdb!.popular)])
+
+    return { enabled: true, shelves: [{ title: 'Trending this week', items: trending }, { title: 'Popular right now', items: popular }] }
 }
 
 const server = createServer((req, res) => {
@@ -461,7 +489,13 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
             if (!client.isHost) {
                 return
             }
-            apply(room, { type: 'queueAdd', items: await jf.queueItems(String(msg.itemId)) }, true, now)
+            {
+                const first = room.queue.length
+                if (apply(room, { type: 'queueAdd', items: await jf.queueItems(String(msg.itemId)) }, true, now) && msg.playNow === true) {
+                    apply(room, { type: 'jump', index: first }, true, Date.now()) // "Watch now": start what was just added
+                }
+            }
+            updateWaiting(room)
             break
         default:
             return

@@ -147,6 +147,7 @@ Host-only endpoints (search library, add to queue) call `jellyfin` directly behi
 * `JELLYFIN_USER_ID` — optional; run as this Jellyfin user (default: the first administrator, since Jellyfin 10.11 rejects PlaybackInfo without a user; limits libraries to that user's)
 * `HOST_PASSWORD` — host login
 * `PUBLIC_URL` — external base URL; its host is accepted as the websocket Origin and `https://` enables the Secure cookie flag (links and Cast use the browser's `location.origin`)
+* `TMDB_API_KEY` — optional; TMDB trending/popular lists matched to the library by TMDB id (v3 key or v4 token)
 * `PORT` — default 8080
 
 ## Security
