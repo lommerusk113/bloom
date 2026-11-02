@@ -38,3 +38,8 @@ export function median(values) {
 export function adaptLead(lead, driftAfterSeek) {
     return Math.min(Math.max(lead - driftAfterSeek, 0), MAX_SEEK_LEAD)
 }
+
+/** Retry delay after another consecutive failure: min first, then doubling up to max. previousMs 0 = no failure yet. */
+export function nextBackoff(previousMs, min, max) {
+    return previousMs ? Math.min(previousMs * 2, max) : min
+}

@@ -1,5 +1,5 @@
 import { connectRoom } from './ws.js'
-import { adaptLead, decide, targetPosition } from './sync.js'
+import { adaptLead, decide, nextBackoff, targetPosition } from './sync.js'
 import { deviceProfile, playbackInfo, proxied, stopStream, subtitlePath, withDevice } from './playback.js'
 import { setupCast } from './cast.js'
 
@@ -14,7 +14,7 @@ let state = null      // last 'state' message
 let isHost = false
 let current = null    // { itemId, source } of the loaded stream; source null while loading
 let loadToken = 0
-let retry = { itemId: null, delay: 5000 } // backoff for consecutive load failures of one item
+let retry = { itemId: null, delay: 0 } // backoff for consecutive load failures of one item
 let hls = null
 let dragging = false
 let seekLead = 1        // seconds to seek past the target, learned from how far behind seeks land
@@ -116,16 +116,15 @@ async function load(itemId) {
         showSubtitles()
         fillPickers()
         $('status').textContent = ''
-        retry = { itemId: null, delay: 5000 }
+        retry = { itemId: null, delay: 0 }
     } catch (err) {
         if (token !== loadToken) {
             return
         }
         if (retry.itemId !== itemId) {
-            retry = { itemId, delay: 5000 }
+            retry = { itemId, delay: 0 }
         }
-        const delay = retry.delay
-        retry.delay = Math.min(delay * 2, 60_000)
+        const delay = retry.delay = nextBackoff(retry.delay, 5000, 60_000)
         $('status').textContent = `${err.message} – retrying in ${delay / 1000}s…`
         setTimeout(() => {
             if (token === loadToken) {

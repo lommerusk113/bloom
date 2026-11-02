@@ -1,10 +1,10 @@
 // Chromecast via Google's Default Media Receiver. The sender SDK only exists in Chrome.
-import { adaptLead, decide } from './sync.js'
+import { adaptLead, decide, nextBackoff } from './sync.js'
 import { deviceProfile, playbackInfo, proxied, subtitlePath, withDevice } from './playback.js'
 
 const COOLDOWN_MS = 3000
 const SEEK_COOLDOWN_MS = 8000 // a seek can restart the transcode; give it time to land
-const MAX_RETRY_MS = 30_000
+const MAX_RETRY_MS = 30_000 // Cast retries start at COOLDOWN_MS (one timer gates every Cast action), so they cap lower than the web 5s-60s
 
 export function setupCast({ roomId, deviceId, getState }) {
     const castDevice = `${deviceId}-cast`
@@ -15,7 +15,7 @@ export function setupCast({ roomId, deviceId, getState }) {
     let lastSeek = 0
     let seekLead = 3
     let pendingSeek = false
-    let loadFailures = 0
+    let retryDelay = 0 // grows while loads keep failing
 
     function init() {
         const context = cast.framework.CastContext.getInstance()
@@ -27,7 +27,7 @@ export function setupCast({ roomId, deviceId, getState }) {
         controller = new cast.framework.RemotePlayerController(player)
         controller.addEventListener(cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED, () => {
             loadedItem = null
-            loadFailures = 0
+            retryDelay = 0
         })
     }
 
@@ -79,9 +79,7 @@ export function setupCast({ roomId, deviceId, getState }) {
         sync(target) {
             const { room } = getState()
             const item = room.queue[room.index]
-            // failed loads back off: 3s, 6s, 12s ... up to 30s
-            const cooldown = Math.min(COOLDOWN_MS * 2 ** Math.max(0, loadFailures - 1), MAX_RETRY_MS)
-            if (!item || Date.now() - lastAction < cooldown) {
+            if (!item || Date.now() - lastAction < (retryDelay || COOLDOWN_MS)) {
                 return
             }
             if (loadedItem !== item.id) {
@@ -89,11 +87,11 @@ export function setupCast({ roomId, deviceId, getState }) {
                 lastAction = Date.now()
                 pendingSeek = false
                 load(item, target, room.playing).then(() => {
-                    loadFailures = 0
+                    retryDelay = 0
                 }, (err) => {
                     console.error('Cast load failed', err)
                     loadedItem = null
-                    loadFailures++
+                    retryDelay = nextBackoff(retryDelay, COOLDOWN_MS, MAX_RETRY_MS) // 3s, 6s ... 30s
                     lastAction = Date.now()
                 })
                 return

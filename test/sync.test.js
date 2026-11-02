@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { adaptLead, decide, median, targetPosition } from '../web/sync.js'
+import { adaptLead, decide, median, nextBackoff, targetPosition } from '../web/sync.js'
 
 test('small drift is ignored', () => {
     assert.deepEqual(decide(0.2, true), { action: 'none' })
@@ -45,4 +45,10 @@ test('adaptLead grows when behind and shrinks when ahead', () => {
 test('adaptLead is clamped to 0 and MAX_SEEK_LEAD', () => {
     assert.equal(adaptLead(1, 4), 0)
     assert.equal(adaptLead(4, -10), 5)
+})
+
+test('nextBackoff starts at min and doubles up to max', () => {
+    assert.equal(nextBackoff(0, 5000, 60_000), 5000)
+    assert.equal(nextBackoff(5000, 5000, 60_000), 10_000)
+    assert.equal(nextBackoff(40_000, 5000, 60_000), 60_000)
 })
