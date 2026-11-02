@@ -102,6 +102,10 @@ export function decide(s: JfSession | undefined, room: Room, t: Track, now: numb
     const cooldown = t.lastKind === 'play' ? PLAY_COOLDOWN_MS : COMMAND_COOLDOWN_MS
     const cooling = now - t.lastCmdAt < cooldown && room.updatedAt <= t.lastCmdAt
     if (normalizeId(s.NowPlayingItem?.Id ?? '') !== normalizeId(item.id)) {
+        // the session finished the item the room is ending too; relaunching it would replay the last seconds
+        if (item.runtime > 0 && currentPosition(room, now) >= item.runtime - SEEK_THRESHOLD) {
+            return { kind: 'none' }
+        }
         return cooling ? { kind: 'wait' } : { kind: 'play' }
     }
 

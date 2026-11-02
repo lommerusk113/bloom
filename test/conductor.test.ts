@@ -34,6 +34,12 @@ test('a session on the wrong item gets PlayNow', () => {
     assert.deepEqual(decide(session(0, { item: OTHER }), room(), track(), NOW), { kind: 'play' })
 })
 
+test('a session that finished the item gets no PlayNow at the end of the room item', () => {
+    assert.deepEqual(decide(session(0, { item: OTHER }), room({ position: 3598 }), track(), NOW), { kind: 'none' })
+    assert.deepEqual(decide(session(0, { item: OTHER }), room({ position: 3600, playing: false }), track(), NOW), { kind: 'none' })
+    assert.deepEqual(decide(session(0, { item: OTHER }), room({ position: 3590 }), track(), NOW), { kind: 'play' })
+})
+
 test('waits for a recent PlayNow to land', () => {
     const t = track({ lastCmdAt: NOW - 1000, lastKind: 'play' })
     assert.deepEqual(decide(session(0, { item: OTHER }), room({ updatedAt: NOW - 5000 }), t, NOW), { kind: 'wait' })
