@@ -30,54 +30,73 @@
         <p id="noRooms" class="empty" hidden>No rooms yet. Create one to get a link you can share.</p>
     </section>
 
-    <section id="manage" hidden>
-        <header class="top">
-            <a href="/">← All rooms</a>
-            <button id="endRoom" class="danger">End room</button>
+    <section id="manage" class="app" hidden>
+        <header class="appbar">
+            <a href="/" class="brand" title="All rooms">← Rooms</a>
+            <nav id="libraries" class="tabs"></nav>
+            <form id="searchForm" class="search">
+                <input id="q" type="search" placeholder="Search" required aria-label="Search the library">
+            </form>
+            <div class="appbar-actions">
+                <a id="open" class="button" target="_blank" rel="noopener">Open player ↗</a>
+                <button id="inviteButton" class="primary">Invite</button>
+                <details class="menu">
+                    <summary aria-label="More options">⋯</summary>
+                    <div class="menu-panel">
+                        <button id="endRoom" class="danger">End room for everyone</button>
+                    </div>
+                </details>
+            </div>
         </header>
         <p id="status" class="banner" hidden></p>
 
-        <div class="panel">
-            <h2><span class="step">1</span> Pick something to watch</h2>
-            <div class="row">
-                <div class="tabs" role="tablist">
-                    <button id="tabMovies" role="tab">Movies</button>
-                    <button id="tabShows" role="tab">Shows</button>
+        <div class="layout">
+            <div class="browse">
+                <div id="crumbs" class="crumbs" hidden></div>
+                <div id="filters" class="filters" hidden>
+                    <div id="genres" class="chips"></div>
+                    <select id="sort" aria-label="Sort by">
+                        <option value="name">A–Z</option>
+                        <option value="added">Recently added</option>
+                        <option value="year">Newest</option>
+                        <option value="rating">Top rated</option>
+                    </select>
                 </div>
-                <form id="searchForm" class="row grow">
-                    <input id="q" type="search" placeholder="Search movies, shows and episodes" required>
-                    <button>Search</button>
-                </form>
+                <div id="rows"></div>
+                <div id="catalogue" class="catalogue"></div>
+                <p id="catalogueNote" class="empty" hidden></p>
+                <button id="more" class="more" hidden>Load more</button>
             </div>
-            <div id="crumbs" class="crumbs" hidden></div>
-            <div id="catalogue" class="catalogue"></div>
-            <p id="catalogueNote" class="empty" hidden></p>
-            <button id="more" class="more" hidden>Load more</button>
+
+            <aside class="sidebar">
+                <div class="panel">
+                    <h2>Now playing</h2>
+                    <div class="now">
+                        <div>
+                            <div id="nowTitle" class="now-title">Nothing yet</div>
+                            <div id="nowTime" class="muted">Click a poster to add it</div>
+                        </div>
+                        <div class="row">
+                            <button id="toggle" class="primary" disabled>▶ Play</button>
+                            <button id="next" disabled>Next ⏭</button>
+                        </div>
+                    </div>
+                    <h3>Queue</h3>
+                    <ol id="queue" class="list"></ol>
+                    <p id="emptyQueue" class="empty">Empty — pick something on the left.</p>
+                    <h3>Watching</h3>
+                    <p id="viewers" class="chips"></p>
+                </div>
+            </aside>
         </div>
 
-        <div class="panel">
-            <h2><span class="step">2</span> Queue</h2>
-            <div id="nowPlaying" class="now">
-                <div>
-                    <div id="nowTitle" class="now-title">Nothing yet — pick something above</div>
-                    <div id="nowTime" class="muted"></div>
-                </div>
-                <div class="row">
-                    <button id="toggle" class="primary" disabled>▶ Play</button>
-                    <button id="next" disabled>Next ⏭</button>
-                </div>
-            </div>
-            <ol id="queue" class="list"></ol>
-            <p id="emptyQueue" class="empty">The queue is empty.</p>
-        </div>
-
-        <div class="panel">
-            <h2><span class="step">3</span> Invite people</h2>
+        <dialog id="invite" class="dialog">
+            <form method="dialog" class="dialog-close"><button aria-label="Close">✕</button></form>
+            <h2>Invite people</h2>
             <p class="muted">Anyone with this link can join, no Jellyfin account needed.</p>
             <div class="row">
                 <input id="link" readonly aria-label="Guest link">
-                <button id="copy">Copy link</button>
-                <a id="open" class="button" target="_blank" rel="noopener">Open player ↗</a>
+                <button id="copy" class="primary">Copy link</button>
             </div>
             <form id="passwordForm" class="row">
                 <input id="roomPassword" placeholder="Room password (optional)" maxlength="100" autocomplete="off" aria-label="Room password">
@@ -85,12 +104,10 @@
             </form>
             <p id="passwordNote" class="muted"></p>
             <label class="check"><input id="guestControl" type="checkbox"> Guests may pause, seek and skip</label>
-        </div>
-
-        <div class="panel">
-            <h2>Who's here</h2>
-            <p id="viewers" class="chips"></p>
-        </div>
+            <div class="row dialog-actions">
+                <a id="openFromInvite" class="button" target="_blank" rel="noopener">Open player ↗</a>
+            </div>
+        </dialog>
     </section>
 </main>
 <script type="module" src="/web/host.js"></script>

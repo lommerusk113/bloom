@@ -44,9 +44,11 @@ test('library pages through one item type and labels cards', async (t) => {
         urls.push(url)
         return Response.json({ Items: [{ Id: 'e', Name: 'Pilot', Type: 'Episode', SeriesName: 'Show', ParentIndexNumber: 1, IndexNumber: 2 }], TotalRecordCount: 61 })
     })
-    const page = await createJellyfin('http://jf', 'key', 'u1').library('Series', 60)
+    const page = await createJellyfin('http://jf', 'key', 'u1').library({ parent: 'lib', genre: 'Drama', sort: 'added', start: 60 })
     const query = new URL(urls[0]).searchParams
-    assert.equal(query.get('IncludeItemTypes'), 'Series')
+    assert.equal(query.get('ParentId'), 'lib')
+    assert.equal(query.get('Genres'), 'Drama')
+    assert.equal(query.get('SortBy'), 'DateCreated,SortName')
     assert.equal(query.get('StartIndex'), '60')
     assert.equal(page.total, 61)
     assert.deepEqual(page.items[0], { id: 'e', name: 'Show S01E02 – Pilot', type: 'Episode', title: 'Pilot', subtitle: 'Show · S01E02' })

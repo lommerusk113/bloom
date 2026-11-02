@@ -109,7 +109,7 @@ Host-only endpoints (search library, add to queue) call `jellyfin` directly behi
   * |drift| < 0.3s → nothing (reset `playbackRate` to 1).
   * 0.3s ≤ |drift| ≤ 2s → `playbackRate` 0.95 or 1.05 until within 0.3s.
   * |drift| > 2s → seek.
-* Local buffering does **not** pause the room; client catches up after.
+* A viewer that is loading or buffering reports it; the server holds the playing room still (`waiting`) until every such viewer is ready, ignoring one that buffers over 15s. The player's counter shows its own position, so it stops while loading.
 * User actions (play/pause/seek/next) are sent as commands; UI reflects server-confirmed state.
 * Audio/subtitle/bitrate picker per viewer.
 * Host UI: password login, library search, queue editing, guest-control toggle, season/episode browsing, end room (also on the player page for the host).
@@ -133,7 +133,7 @@ Host-only endpoints (search library, add to queue) call `jellyfin` directly behi
 
 | Situation | Behavior |
 |---|---|
-| Web client buffers | Room continues; client catches up via rate/seek |
+| Web client buffers | Room waits for it (max 15s), then continues; it catches up via rate/seek |
 | Web client disconnects | Auto-reconnect with backoff; resyncs to room state; a room that no longer exists closes the socket with 4404, the client stops reconnecting and shows "This room no longer exists" |
 | Room idle (no web clients) | Deleted after 30 min |
 | Jellyfin unreachable / bad API key | Startup check fails loudly in logs; host UI shows error; guests see "server unavailable" |

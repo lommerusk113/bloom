@@ -253,9 +253,18 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (method === 'GET' && path === '/api/search') {
         return sendJson(res, 200, await jf.search(url.searchParams.get('q') ?? ''))
     }
+    const param = (name: string) => url.searchParams.get(name) ?? ''
+    if (method === 'GET' && path === '/api/views') {
+        return sendJson(res, 200, await jf.views())
+    }
     if (method === 'GET' && path === '/api/library') {
-        const type = url.searchParams.get('type') === 'Series' ? 'Series' : 'Movie'
-        return sendJson(res, 200, await jf.library(type, Math.max(0, Number(url.searchParams.get('start')) || 0)))
+        return sendJson(res, 200, await jf.library({ parent: param('parent'), genre: param('genre'), sort: param('sort'), start: Math.max(0, Number(param('start')) || 0) }))
+    }
+    if (method === 'GET' && path === '/api/latest') {
+        return sendJson(res, 200, await jf.latest(param('parent')))
+    }
+    if (method === 'GET' && path === '/api/genres') {
+        return sendJson(res, 200, await jf.genres(param('parent')))
     }
     if (method === 'GET' && path === '/api/image') {
         const id = url.searchParams.get('id') ?? ''

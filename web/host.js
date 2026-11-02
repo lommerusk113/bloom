@@ -124,6 +124,8 @@ function manage(room) {
     const url = `${location.origin}/r/${roomId}`
     $('link').value = url
     $('open').href = url
+    $('openFromInvite').href = url
+    $('inviteButton').onclick = () => $('invite').showModal()
     $('copy').onclick = async () => {
         if (navigator.clipboard) {
             await navigator.clipboard.writeText(url)
@@ -156,57 +158,122 @@ function manage(room) {
             state = null
             showStatus('This room no longer exists')
         } else if (msg.type === 'state') {
+            const wasEmpty = state !== null && state.room.queue.length === 0
             state = msg
             render()
+            if (wasEmpty && msg.room.queue.length > 0 && msg.viewers.length === 0) {
+                $('invite').showModal() // first pick and nobody here yet: time to share the link
+            }
         }
     }, true)
 
     $('toggle').onclick = () => command({ type: state.room.playing ? 'pause' : 'play' })
     $('next').onclick = () => command({ type: 'next' })
     $('guestControl').onchange = () => command({ type: 'setGuestControl', value: $('guestControl').checked })
-    const list = (path) => async () => {
-        const items = await api(path)
-        return { items, total: items.length }
-    }
-    const tab = (type, label) => () => {
-        $('tabMovies').classList.toggle('active', type === 'Movie')
-        $('tabShows').classList.toggle('active', type === 'Series')
-        browse([{ label, load: start => api(`/api/library?type=${type}&start=${start}`) }])
-    }
-    $('tabMovies').onclick = tab('Movie', 'Movies')
-    $('tabShows').onclick = tab('Series', 'Shows')
     $('searchForm').onsubmit = (event) => {
         event.preventDefault()
         const term = $('q').value
-        $('tabMovies').classList.remove('active')
-        $('tabShows').classList.remove('active')
+        selectTab(null)
         browse([{ label: `Results for “${term}”`, load: list(`/api/search?q=${encodeURIComponent(term)}`) }])
     }
-    $('tabMovies').click()
+    setupLibraries()
     setInterval(renderTime, 1000)
 }
 
 const addItem = (id) => socket.send({ type: 'addItem', itemId: id })
+const list = (path) => async () => {
+    const items = await api(path)
+    return { items, total: items.length }
+}
+
+let views = []
+
+async function setupLibraries() {
+    try {
+        views = await api('/api/views')
+    } catch (err) {
+        showStatus(err.message)
+    }
+    const tabs = [{ id: 'home', name: 'Home' }, ...views]
+    $('libraries').replaceChildren(...tabs.map((v) => {
+        const b = button(v.name, () => (v.id === 'home' ? home() : openLibrary(v)))
+        b.dataset.id = v.id
+        return b
+    }))
+    home()
+}
+
+function selectTab(id) {
+    for (const b of $('libraries').children) {
+        b.classList.toggle('active', b.dataset.id === id)
+    }
+}
+
+function clearBrowse() {
+    browseToken++
+    $('crumbs').hidden = true
+    $('filters').hidden = true
+    $('rows').replaceChildren()
+    $('catalogue').replaceChildren()
+    $('more').hidden = true
+    note('')
+}
+
+/** Jellyfin-style home: a row of recently added posters per library. */
+async function home() {
+    selectTab('home')
+    clearBrowse()
+    const token = browseToken
+    $('rows').replaceChildren(...views.map((v) => {
+        const section = el('section', 'shelf')
+        const head = button(`Recently added in ${v.name} ›`, () => openLibrary(v), { className: 'shelf-title' })
+        const strip = el('div', 'strip')
+        strip.append(el('span', 'muted', 'Loading…'))
+        section.append(head, strip)
+        api(`/api/latest?parent=${encodeURIComponent(v.id)}`).then((items) => {
+            if (token === browseToken) {
+                strip.replaceChildren(...(items.length ? items.map(i => card([{ label: 'Home', back: home }], i)) : [el('span', 'muted', 'Nothing yet')]))
+            }
+        }, () => strip.replaceChildren(el('span', 'error', 'Could not load')))
+        return section
+    }))
+}
+
+/** A library as a poster grid, filtered by genre and sorted. */
+async function openLibrary(view, genre = '', sort = $('sort').value) {
+    selectTab(view.id)
+    const query = (start) => new URLSearchParams({ parent: view.id, genre, sort, start: String(start) })
+    browse([{ label: view.name, load: start => api(`/api/library?${query(start)}`), back: () => openLibrary(view, genre, sort) }])
+    const token = browseToken
+    $('filters').hidden = false
+    $('sort').onchange = () => openLibrary(view, genre, $('sort').value)
+    const chip = (name, value) => button(name, () => openLibrary(view, value, $('sort').value), { className: `chip-button${value === genre ? ' active' : ''}` })
+    view.genres ??= api(`/api/genres?parent=${encodeURIComponent(view.id)}`).catch(() => [])
+    const genres = await view.genres
+    if (token !== browseToken) {
+        return
+    }
+    $('genres').replaceChildren(chip('All', ''), ...genres.map(g => chip(g, g)))
+}
 
 let browseToken = 0
 
 /**
- * Shows the last level of a trail (Movies/Shows/search → show → season) as poster cards; crumbs go back up.
+ * Shows the last level of a trail (library/search → show → season) as poster cards; crumbs go back up.
  * level.load(start) resolves to { items, total }; level.addAll is the show or season id the level lists.
  */
 async function browse(trail) {
-    const token = ++browseToken // a slower earlier load must not overwrite this one
+    clearBrowse()
+    const token = browseToken // a slower earlier load must not overwrite this one
     const level = trail.at(-1)
     $('crumbs').hidden = trail.length < 2
     $('crumbs').replaceChildren(...trail.flatMap((step, i) => {
-        const crumb = i === trail.length - 1 ? el('strong', '', step.label) : button(step.label, () => browse(trail.slice(0, i + 1)), { className: 'link' })
+        const crumb = i === trail.length - 1 ? el('strong', '', step.label) : button(step.label, () => (step.back ? step.back() : browse(trail.slice(0, i + 1))), { className: 'link' })
         return i ? [el('span', 'muted', ' › '), crumb] : [crumb]
     }), ...(level.addAll ? [button(level.addLabel, (e) => {
         addItem(level.addAll)
         e.target.textContent = '✓ Added'
     }, { className: 'primary push' })] : []))
-    $('catalogue').replaceChildren()
-    $('more').hidden = true
     note('Loading…')
     await loadPage(trail, level, 0, token)
 }
@@ -260,10 +327,7 @@ function card(trail, i) {
             const isShow = i.type === 'Series'
             browse([...trail, {
                 label: i.title,
-                load: async () => {
-                    const items = await api(`/api/children?id=${encodeURIComponent(i.id)}`)
-                    return { items, total: items.length }
-                },
+                load: list(`/api/children?id=${encodeURIComponent(i.id)}`),
                 addAll: i.id,
                 addLabel: isShow ? '+ Add whole show' : '+ Add whole season',
             }])
@@ -279,18 +343,19 @@ function card(trail, i) {
 function renderTime() {
     const item = state?.room.queue[state.room.index]
     if (!item) {
-        $('nowTime').textContent = ''
+        $('nowTime').textContent = 'Click a poster to add it'
         return
     }
     const position = Math.min(targetPosition(state.room, socket.serverNow()), item.runtime || Infinity)
-    $('nowTime').textContent = `${state.room.playing ? 'Playing' : 'Paused'} · ${clock(position)} / ${clock(item.runtime)}`
+    const mode = state.room.waiting ? `Waiting for ${state.waitingFor.join(', ')}` : state.room.playing ? 'Playing' : 'Paused'
+    $('nowTime').textContent = `${mode} · ${clock(position)} / ${clock(item.runtime)}`
 }
 
 function render() {
     const { room, viewers } = state
     const item = room.queue[room.index]
     $('guestControl').checked = room.guestControl
-    $('nowTitle').textContent = item?.name ?? 'Nothing yet — add something below'
+    $('nowTitle').textContent = item?.name ?? 'Nothing yet'
     $('toggle').disabled = !item
     $('next').disabled = room.index >= room.queue.length - 1
     $('toggle').textContent = room.playing ? '⏸ Pause' : '▶ Play'
@@ -309,7 +374,7 @@ function render() {
         return row
     }))
 
-    $('viewers').replaceChildren(...(viewers.length ? viewers.map(v => el('span', 'chip', v)) : [el('span', 'muted', 'Nobody has joined yet')]))
+    $('viewers').replaceChildren(...(viewers.length ? viewers.map(v => el('span', 'chip', v)) : [el('span', 'muted', 'Nobody yet — use Invite')]))
 }
 
 start().catch((err) => {

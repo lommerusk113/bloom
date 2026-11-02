@@ -71,11 +71,34 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
             return (await listItems(query)).Items.map(card)
         },
 
-        /** One page of all movies or all shows, A–Z. */
-        async library(type: 'Movie' | 'Series', start: number): Promise<{ items: Card[]; total: number }> {
-            const query = new URLSearchParams({ IncludeItemTypes: type, Recursive: 'true', SortBy: 'SortName', Limit: String(PAGE), StartIndex: String(start) })
+        /** The user's video libraries, as Jellyfin's home screen lists them. */
+        async views(): Promise<Array<{ id: string; name: string }>> {
+            const res = await json<{ Items: Array<{ Id: string; Name: string; CollectionType?: string }> }>(`/UserViews?${new URLSearchParams({ userId: user ?? '' })}`)
+            return res.Items.filter(v => VIDEO_LIBRARIES.has(v.CollectionType ?? 'mixed')).map(v => ({ id: v.Id, name: v.Name }))
+        },
+
+        /** One page of a library's movies and shows. */
+        async library(o: { parent: string; genre?: string; sort?: string; start: number }): Promise<{ items: Card[]; total: number }> {
+            const query = new URLSearchParams({
+                ParentId: o.parent, IncludeItemTypes: 'Movie,Series', Recursive: 'true', Limit: String(PAGE), StartIndex: String(o.start),
+                ...SORTS[o.sort ?? ''] ?? SORTS.name,
+            })
+            if (o.genre) {
+                query.set('Genres', o.genre)
+            }
             const res = await listItems(query)
             return { items: res.Items.map(card), total: res.TotalRecordCount ?? res.Items.length }
+        },
+
+        /** Recently added to a library, newest first. */
+        async latest(parent: string): Promise<Card[]> {
+            const query = new URLSearchParams({ ParentId: parent, Limit: '24', userId: user ?? '' })
+            return (await json<JfItem[]>(`/Items/Latest?${query}`)).map(card)
+        },
+
+        async genres(parent: string): Promise<string[]> {
+            const query = new URLSearchParams({ ParentId: parent, SortBy: 'SortName', userId: user ?? '' })
+            return (await json<{ Items: Array<{ Name: string }> }>(`/Genres?${query}`)).Items.map(g => g.Name)
         },
 
         /** Seasons of a series, or episodes of a season, in order. */
@@ -106,6 +129,13 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
 }
 
 const PAGE = 60
+const VIDEO_LIBRARIES = new Set(['movies', 'tvshows', 'mixed', 'homevideos'])
+const SORTS: Record<string, Record<string, string>> = {
+    name: { SortBy: 'SortName', SortOrder: 'Ascending' },
+    added: { SortBy: 'DateCreated,SortName', SortOrder: 'Descending' },
+    year: { SortBy: 'ProductionYear,SortName', SortOrder: 'Descending' },
+    rating: { SortBy: 'CommunityRating,SortName', SortOrder: 'Descending' },
+}
 
 /** What the host's catalogue shows: title, a line below it, and the full label used in the queue. */
 export type Card = { id: string; name: string; type: string; title: string; subtitle: string }
