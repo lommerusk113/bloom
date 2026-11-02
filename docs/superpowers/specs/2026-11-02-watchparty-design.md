@@ -115,7 +115,7 @@ Host-only endpoints (search library, add to queue) call `jellyfin` directly behi
 * Local buffering does **not** pause the room; client catches up after.
 * User actions (play/pause/seek/next) are sent as commands; UI reflects server-confirmed state.
 * Audio/subtitle/bitrate picker per viewer.
-* Host UI: password login, library search, queue editing, guest-control toggle, native session picker with per-session status, end room.
+* Host UI: password login, library search, queue editing, guest-control toggle, native session picker with per-session status, end room (also on the player page for the host).
 
 ### Chromecast
 

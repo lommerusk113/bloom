@@ -59,6 +59,7 @@ $('join').onsubmit = (event) => {
 function onMessage(msg) {
     if (msg.type === 'welcome') {
         isHost = msg.isHost
+        $('endRoom').hidden = !isHost
         $('status').textContent = ''
         return
     }
@@ -70,6 +71,7 @@ function onMessage(msg) {
         state = null // syncNow stops driving the player and Chromecast
         cast?.stop()
         unloadStream()
+        $('endRoom').hidden = true
         for (const id of ['toggle', 'seek', 'next']) {
             $(id).disabled = true // their handlers read state
         }
@@ -287,6 +289,16 @@ const command = (cmd) => socket.send({ type: 'cmd', cmd })
 
 $('toggle').onclick = () => command({ type: state.room.playing ? 'pause' : 'play' })
 $('next').onclick = () => command({ type: 'next' })
+$('endRoom').onclick = async () => {
+    if (!confirm('End the room for everyone?')) {
+        return
+    }
+    // the server then closes every socket with 4404, which shows this page as gone
+    const res = await fetch(`/api/rooms/${roomId}`, { method: 'DELETE' }).catch(() => null)
+    if (!res?.ok) {
+        $('status').textContent = 'Could not end the room'
+    }
+}
 $('seek').oninput = () => {
     dragging = true
 }

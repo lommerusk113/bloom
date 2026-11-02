@@ -42,7 +42,7 @@ Watchparty never encodes video itself. Every guest gets an HLS stream from Jelly
 2. Share the room link. Guests enter a name and watch.
 3. To watch on a TV or phone with the Jellyfin app: open the app on that device (logged in as anyone), then on the host page pick it under **Native Jellyfin devices** and click **Add**. Tick **My device** for your own devices so they can always control playback.
 4. **Guests can control playback** decides whether guests and untrusted native devices may pause, seek or skip. Devices ticked **My device** may always control playback.
-5. **End room** stops it for everyone: guests are disconnected, added native devices pause, and the room's transcodes stop. Rooms nobody is watching are also removed after 30 minutes.
+5. **End room** (host page, or the player page when logged in as host) stops it for everyone: guests are disconnected, added native devices pause, and the room's transcodes stop. Rooms nobody is watching are also removed after 30 minutes.
 
 Native apps sync to within about 3 seconds (they report their position rarely); browsers within about 0.3 seconds.
 
