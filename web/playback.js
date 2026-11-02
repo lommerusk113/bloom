@@ -43,7 +43,7 @@ export function deviceProfile(video, castSafe = false) {
     if (can('audio/mp4; codecs="ec-3"')) {
         audioCodecs.push('eac3')
     }
-    const textSubs = ['vtt', 'srt', 'subrip', 'ass', 'ssa'].map(Format => ({ Format, Method: 'External' }))
+    const textSubs = ['vtt', 'webvtt', 'srt', 'subrip', 'ass', 'ssa', 'mov_text'].map(Format => ({ Format, Method: 'External' }))
     return {
         MaxStreamingBitrate: 120_000_000,
         DirectPlayProfiles: [],
