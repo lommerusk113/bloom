@@ -177,6 +177,9 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
         try {
             const sessions = await jf.sessions()
             for (const room of active) {
+                if (rooms.get(room.id) !== room) {
+                    continue // deleted while sessions() was in flight
+                }
                 for (const ns of room.nativeSessions.filter(n => n.status === 'syncing')) {
                     await step(room, ns, sessions.find(s => s.Id === ns.sessionId), now ?? Date.now())
                 }
