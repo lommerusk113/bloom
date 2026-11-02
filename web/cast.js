@@ -17,6 +17,7 @@ export function setupCast({ roomId, deviceId, getState }) {
     let pendingSeek = false
     let retryDelay = 0 // grows while loads keep failing
     let loading = false
+    let loadToken = 0 // a newer load makes the older one's callbacks no-ops
     let transcodingUrl = null // of the loaded cast source, to stop its transcode
 
     function init() {
@@ -30,6 +31,8 @@ export function setupCast({ roomId, deviceId, getState }) {
         controller.addEventListener(cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED, () => {
             loadedItem = null
             retryDelay = 0
+            loadToken++ // an in-flight load belongs to the old session
+            loading = false
             if (!player.isConnected) {
                 stopTranscode()
             }
@@ -54,9 +57,13 @@ export function setupCast({ roomId, deviceId, getState }) {
         }
     }
 
-    async function load(item, target, playing) {
+    async function load(token, item, target, playing) {
         stopTranscode()
         const source = await playbackInfo(roomId, item.id, deviceProfile(null, true), { deviceId: castDevice })
+        if (token !== loadToken) {
+            stopStream(roomId, source.TranscodingUrl, castDevice) // superseded: don't leak its transcode
+            return
+        }
         transcodingUrl = source.TranscodingUrl
         const url = location.origin + proxied(roomId, withDevice(source.TranscodingUrl, castDevice))
         const media = new chrome.cast.media.MediaInfo(url, 'application/x-mpegURL')
@@ -93,7 +100,7 @@ export function setupCast({ roomId, deviceId, getState }) {
         sync(target) {
             const { room } = getState()
             const item = room.queue[room.index]
-            if (!item || Date.now() - lastAction < (retryDelay || COOLDOWN_MS)) {
+            if (!item || loading || Date.now() - lastAction < (retryDelay || COOLDOWN_MS)) {
                 return
             }
             if (loadedItem !== item.id) {
@@ -101,10 +108,17 @@ export function setupCast({ roomId, deviceId, getState }) {
                 lastAction = Date.now()
                 pendingSeek = false
                 loading = true
-                load(item, target, room.playing).then(() => {
+                const token = ++loadToken
+                load(token, item, target, room.playing).then(() => {
+                    if (token !== loadToken) {
+                        return
+                    }
                     loading = false
                     lastAction = Date.now()
                 }, (err) => {
+                    if (token !== loadToken) {
+                        return
+                    }
                     console.error('Cast load failed', err)
                     loading = false
                     loadedItem = null
