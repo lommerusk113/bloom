@@ -11,6 +11,8 @@ import { advanceIfEnded, apply, createRoom, parseCommand, type Room } from './ro
 
 type Client = { ws: WebSocket; name: string; isHost: boolean }
 
+const alive = new WeakSet<WebSocket>()
+
 const ROOM_TTL_MS = 30 * 60_000
 const WEB_DIR = join(import.meta.dirname, '..', 'web')
 const HLS_JS = join(import.meta.dirname, '..', 'node_modules', 'hls.js', 'dist', 'hls.min.js')
@@ -183,6 +185,8 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
     const set = clients.get(room.id) ?? new Set<Client>()
     clients.set(room.id, set)
     set.add(client)
+    alive.add(ws)
+    ws.on('pong', () => alive.add(ws))
     ws.send(JSON.stringify({ type: 'welcome', isHost }))
     broadcast(room)
 
@@ -284,6 +288,16 @@ setInterval(() => {
         }
     }
 }, 1000)
+
+setInterval(() => {
+    for (const ws of wss.clients) {
+        if (!alive.delete(ws)) {
+            ws.terminate()
+            continue
+        }
+        ws.ping()
+    }
+}, 30_000)
 
 setInterval(() => {
     conductor.tick().catch((err: Error) => console.error('Conductor:', err.message))
