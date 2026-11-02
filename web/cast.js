@@ -1,6 +1,6 @@
 // Chromecast via Google's Default Media Receiver. The sender SDK only exists in Chrome.
 import { adaptLead, decide, nextBackoff } from './sync.js'
-import { deviceProfile, playbackInfo, proxied, subtitlePath, withDevice } from './playback.js'
+import { deviceProfile, playbackInfo, proxied, stopStream, subtitlePath, withDevice } from './playback.js'
 
 const COOLDOWN_MS = 3000
 const SEEK_COOLDOWN_MS = 8000 // a seek can restart the transcode; give it time to land
@@ -17,6 +17,7 @@ export function setupCast({ roomId, deviceId, getState }) {
     let pendingSeek = false
     let retryDelay = 0 // grows while loads keep failing
     let loading = false
+    let transcodingUrl = null // of the loaded cast source, to stop its transcode
 
     function init() {
         const context = cast.framework.CastContext.getInstance()
@@ -29,6 +30,9 @@ export function setupCast({ roomId, deviceId, getState }) {
         controller.addEventListener(cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED, () => {
             loadedItem = null
             retryDelay = 0
+            if (!player.isConnected) {
+                stopTranscode()
+            }
         })
     }
 
@@ -43,8 +47,17 @@ export function setupCast({ roomId, deviceId, getState }) {
         }
     }
 
+    function stopTranscode() {
+        if (transcodingUrl) {
+            stopStream(roomId, transcodingUrl, castDevice)
+            transcodingUrl = null
+        }
+    }
+
     async function load(item, target, playing) {
+        stopTranscode()
         const source = await playbackInfo(roomId, item.id, deviceProfile(null, true), { deviceId: castDevice })
+        transcodingUrl = source.TranscodingUrl
         const url = location.origin + proxied(roomId, withDevice(source.TranscodingUrl, castDevice))
         const media = new chrome.cast.media.MediaInfo(url, 'application/x-mpegURL')
         media.hlsSegmentFormat = chrome.cast.media.HlsSegmentFormat.FMP4
