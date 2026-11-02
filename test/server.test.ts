@@ -51,6 +51,7 @@ function openSocket(roomId: string, cookie?: string, origin?: string) {
     return {
         ready: once(ws, 'open'),
         send: (msg: unknown) => ws.send(JSON.stringify(msg)),
+        messages,
         close: () => ws.close(),
         next: (match: (m: Record<string, any>) => boolean) => waitFor(async () => messages.find(match)),
     }
@@ -126,4 +127,20 @@ test('a malformed upgrade target does not crash the server', async () => {
     socket.end('GET http://[::1 HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n')
     await once(socket, 'close')
     assert.equal((await fetch(`${BASE}/api/health`)).status, 200)
+})
+
+test('websocket messages beyond the rate limit are dropped', async () => {
+    const cookie = await login()
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
+    const guest = openSocket(id)
+    await guest.ready
+    for (let i = 0; i < 200; i++) {
+        guest.send({ type: 'hello', name: `G${i}` })
+    }
+    await guest.next(m => m.type === 'state' && m.viewers.includes('G19'))
+    await sleep(300)
+    const states = guest.messages.filter(m => m.type === 'state')
+    assert.ok(states.length < 50, `got ${states.length} state messages`)
+    assert.equal((await fetch(`${BASE}/api/health`)).status, 200)
+    guest.close()
 })

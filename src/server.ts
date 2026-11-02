@@ -9,11 +9,14 @@ import { createJellyfin } from './jellyfin.ts'
 import { proxyRequest, readBody } from './proxy.ts'
 import { advanceIfEnded, apply, createRoom, parseCommand, type Room } from './room.ts'
 
-type Client = { ws: WebSocket; name: string; isHost: boolean }
+/** windowStart/count/strikes: websocket rate limit state, see overLimit. */
+type Client = { ws: WebSocket; name: string; isHost: boolean; windowStart: number; count: number; strikes: number }
 
 const alive = new WeakSet<WebSocket>()
 
 const ROOM_TTL_MS = 30 * 60_000
+const MAX_MESSAGES_PER_SECOND = 20
+const MAX_STRIKES = 5
 const WEB_DIR = join(import.meta.dirname, '..', 'web')
 const HLS_JS = join(import.meta.dirname, '..', 'node_modules', 'hls.js', 'dist', 'hls.min.js')
 const CONTENT_TYPES: Record<string, string> = {
@@ -193,7 +196,7 @@ server.on('upgrade', (req, socket, head) => {
 
 function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
 
-    const client: Client = { ws, name: 'Guest', isHost }
+    const client: Client = { ws, name: 'Guest', isHost, windowStart: 0, count: 0, strikes: 0 }
     const set = clients.get(room.id) ?? new Set<Client>()
     clients.set(room.id, set)
     set.add(client)
@@ -205,6 +208,12 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
     broadcast(room)
 
     ws.on('message', data => {
+        if (overLimit(client, Date.now())) {
+            if (client.strikes >= MAX_STRIKES) {
+                ws.terminate()
+            }
+            return
+        }
         let msg: unknown
         try {
             msg = JSON.parse(String(data))
@@ -224,6 +233,30 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
         set.delete(client)
         broadcast(room)
     })
+}
+
+/**
+ * Counts a message; true when it exceeds the per-second limit and must be dropped.
+ * strikes counts consecutive seconds over the limit.
+ */
+// ponytail: fixed one-second windows rather than a sliding log; bursts across a window edge get up to 2x through
+function overLimit(client: Client, now: number): boolean {
+
+    const elapsed = now - client.windowStart
+    if (elapsed >= 1000) {
+        if (client.count <= MAX_MESSAGES_PER_SECOND || elapsed >= 2000) {
+            client.strikes = 0
+        }
+        client.windowStart = now
+        client.count = 0
+    }
+
+    client.count++
+    if (client.count === MAX_MESSAGES_PER_SECOND + 1) {
+        client.strikes++
+    }
+
+    return client.count > MAX_MESSAGES_PER_SECOND
 }
 
 async function onMessage(client: Client, room: Room, msg: Record<string, unknown>): Promise<void> {
