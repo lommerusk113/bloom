@@ -55,7 +55,7 @@ export function stripApiKeys(playlist: string): string {
  * and drops the filesystem Paths.
  * Records the PlaySessionIds it finds in playSessions as seen at now.
  */
-export function sanitizePlaybackInfo(body: string, playSessions = new Map<string, number>(), now = Date.now()): string {
+function sanitizePlaybackInfo(body: string, playSessions: Map<string, number>, now: number): string {
     const info = JSON.parse(body)
     if (typeof info?.PlaySessionId === 'string') {
         playSessions.set(info.PlaySessionId, now)
