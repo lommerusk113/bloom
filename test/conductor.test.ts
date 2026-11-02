@@ -192,3 +192,18 @@ test('with guest control off, a native user action is reverted', async () => {
     assert.equal(r.playing, true)
     assert.deepEqual(calls, ['unpause'])
 })
+
+test('none without a report newer than our command does not confirm', async () => {
+    const r = room()
+    let current = session(110, { checkIn: NOW - 1000 })
+    const { conductor, calls, changes } = setup(r, () => current)
+    await conductor.tick(NOW)
+    await conductor.tick(NOW + 4000)
+    // the seek was ignored: a later report is a rejection, not a user seek
+    current = session(118, { checkIn: NOW + 7000 })
+    await conductor.tick(NOW + 8000)
+    assert.equal(changes.length, 0)
+    await conductor.tick(NOW + 12_000)
+    assert.deepEqual(calls, ['seek 100', 'seek 112'])
+    assert.equal(r.position, 100)
+})

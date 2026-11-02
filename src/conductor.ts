@@ -202,7 +202,7 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
             return
         }
 
-        if (action.kind === 'none') {
+        if (action.kind === 'none' && s && checkInTime(s) > t.lastCmdAt) {
             t.attempts = 0
             t.confirmed = true
         }
