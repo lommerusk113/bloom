@@ -100,7 +100,19 @@ export function setupCast({ roomId, deviceId, getState }) {
         sync(target) {
             const { room } = getState()
             const item = room.queue[room.index]
-            if (!item || loading || Date.now() - lastAction < (retryDelay || COOLDOWN_MS)) {
+            if (!item) {
+                // queue emptied: stop the receiver and its transcode, drop any in-flight load
+                if (loadedItem) {
+                    cast.framework.CastContext.getInstance().getCurrentSession()?.getMediaSession()
+                        ?.stop(new chrome.cast.media.StopRequest(), () => {}, console.error)
+                    stopTranscode()
+                    loadedItem = null
+                    loadToken++
+                    loading = false
+                }
+                return
+            }
+            if (loading || Date.now() - lastAction < (retryDelay || COOLDOWN_MS)) {
                 return
             }
             if (loadedItem !== item.id) {
