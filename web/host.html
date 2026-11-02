@@ -8,54 +8,89 @@
 </head>
 <body>
 <main class="host">
-    <p id="jfError" class="error"></p>
+    <p id="jfError" class="banner error" hidden></p>
 
     <section id="login" class="card" hidden>
-        <h1>Watchparty host</h1>
+        <h1>Watchparty</h1>
+        <p class="muted">Log in to create rooms and pick what to watch.</p>
         <form id="loginForm" class="row">
             <input id="password" type="password" placeholder="Host password" required autofocus>
-            <button>Log in</button>
+            <button class="primary">Log in</button>
         </form>
         <p id="loginError" class="error"></p>
     </section>
 
     <section id="lobby" hidden>
-        <h1>Rooms</h1>
-        <ul id="rooms"></ul>
-        <button id="newRoom">New room</button>
+        <header class="top">
+            <h1>Watchparty</h1>
+            <button id="newRoom" class="primary">+ New room</button>
+        </header>
+        <p class="muted">A room is one shared screen: everyone in it watches the same thing at the same moment.</p>
+        <ul id="rooms" class="list"></ul>
+        <p id="noRooms" class="empty" hidden>No rooms yet. Create one to get a link you can share.</p>
     </section>
 
     <section id="manage" hidden>
-        <p><a href="/">← Rooms</a></p>
-        <p id="status" class="error"></p>
-        <div class="row">
-            <input id="link" readonly aria-label="Guest link">
-            <button id="copy">Copy link</button>
-            <a id="open" target="_blank" rel="noopener">Open player</a>
-            <button id="endRoom">End room</button>
-        </div>
-        <p><label><input id="guestControl" type="checkbox"> Guests can control playback</label></p>
+        <header class="top">
+            <a href="/">← All rooms</a>
+            <button id="endRoom" class="danger">End room</button>
+        </header>
+        <p id="status" class="banner" hidden></p>
 
-        <h2>Queue</h2>
-        <ol id="queue"></ol>
-        <form id="searchForm" class="row">
-            <input id="q" placeholder="Search movies, shows, episodes" required>
-            <button>Search</button>
-        </form>
-        <ul id="results"></ul>
-
-        <h2>Native Jellyfin devices</h2>
-        <p class="muted">Open the Jellyfin app on the device first, then add it here.</p>
-        <ul id="natives"></ul>
-        <div class="row">
-            <select id="sessions" aria-label="Jellyfin session"></select>
-            <button id="refreshSessions" aria-label="Refresh sessions">↻</button>
-            <label><input id="trusted" type="checkbox" checked> My device (always allowed to control)</label>
-            <button id="addNative">Add</button>
+        <div class="panel">
+            <h2><span class="step">1</span> Invite people</h2>
+            <p class="muted">Anyone with this link can join, no Jellyfin account needed.</p>
+            <div class="row">
+                <input id="link" readonly aria-label="Guest link">
+                <button id="copy">Copy link</button>
+                <a id="open" class="button" target="_blank" rel="noopener">Open player ↗</a>
+            </div>
+            <label class="check"><input id="guestControl" type="checkbox"> Guests may pause, seek and skip</label>
         </div>
 
-        <h2>Connected</h2>
-        <p id="viewers"></p>
+        <div class="panel">
+            <h2><span class="step">2</span> Now playing</h2>
+            <div id="nowPlaying" class="now">
+                <div>
+                    <div id="nowTitle" class="now-title">Nothing yet — add something below</div>
+                    <div id="nowTime" class="muted"></div>
+                </div>
+                <div class="row">
+                    <button id="toggle" class="primary" disabled>▶ Play</button>
+                    <button id="next" disabled>Next ⏭</button>
+                </div>
+            </div>
+            <h3>Up next</h3>
+            <ol id="queue" class="list"></ol>
+            <p id="emptyQueue" class="empty">The queue is empty.</p>
+        </div>
+
+        <div class="panel">
+            <h2><span class="step">3</span> Add to the queue</h2>
+            <form id="searchForm" class="row">
+                <input id="q" type="search" placeholder="Search movies and shows" required>
+                <button>Search</button>
+            </form>
+            <div id="crumbs" class="crumbs" hidden></div>
+            <ul id="results" class="list"></ul>
+        </div>
+
+        <div class="panel">
+            <h2>TVs and Jellyfin apps <span class="muted">(optional)</span></h2>
+            <p class="muted">Open the Jellyfin app on the TV or phone first, then pick it here. Watchparty will control it like a remote.</p>
+            <ul id="natives" class="list"></ul>
+            <div class="row">
+                <select id="sessions" aria-label="Jellyfin device"></select>
+                <button id="refreshSessions" title="Refresh the device list" aria-label="Refresh devices">↻</button>
+                <button id="addNative">Add device</button>
+            </div>
+            <label class="check"><input id="trusted" type="checkbox" checked> This is my device (can always control playback)</label>
+        </div>
+
+        <div class="panel">
+            <h2>Who's here</h2>
+            <p id="viewers" class="chips"></p>
+        </div>
     </section>
 </main>
 <script type="module" src="/web/host.js"></script>

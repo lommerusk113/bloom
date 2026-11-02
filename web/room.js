@@ -343,8 +343,17 @@ function render() {
     }
     $('toggle').textContent = room.playing ? '⏸' : '▶'
     $('seek').max = String(Math.floor(item?.runtime ?? 0))
-    const natives = room.nativeSessions.map(n => `${n.label}${n.status === 'out-of-sync' ? ' (out of sync)' : ''}`)
-    $('info').textContent = `${item?.name ?? 'Nothing queued yet'} · Watching: ${[...viewers, ...natives].join(', ')}`
+    $('title').textContent = item?.name ?? 'Waiting for the host to pick something…'
+    $('lock').hidden = canControl
+    const chip = (text, title = '') => {
+        const span = document.createElement('span')
+        span.className = 'chip'
+        span.textContent = text
+        span.title = title
+        return span
+    }
+    $('viewers').replaceChildren(...viewers.map(v => chip(v)),
+        ...room.nativeSessions.map(n => chip(`📺 ${n.label}${n.status === 'out-of-sync' ? ' ⚠' : ''}`, n.status === 'out-of-sync' ? 'Out of sync' : 'Jellyfin app')))
 }
 
 // --- sync ---

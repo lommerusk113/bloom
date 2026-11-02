@@ -12,11 +12,19 @@
 <body>
 <form id="join" class="card">
     <h1>Join the watch party</h1>
+    <p class="muted">Pick a name so the others know who is watching.</p>
     <input id="name" placeholder="Your name" maxlength="32" required autofocus>
-    <button>Join</button>
+    <button class="primary">Join</button>
 </form>
 
 <main id="player" hidden>
+    <header class="bar">
+        <div>
+            <div id="title" class="now-title">Waiting for the host to pick something…</div>
+            <div id="lock" class="muted" hidden>Only the host can control playback</div>
+        </div>
+        <div id="viewers" class="chips"></div>
+    </header>
     <div class="stage">
         <video id="video" playsinline></video>
         <button id="tap" hidden>▶ Tap to start</button>
@@ -38,9 +46,8 @@
         </select>
         <google-cast-launcher aria-label="Cast"></google-cast-launcher>
         <button id="fullscreen" aria-label="Fullscreen">⛶</button>
-        <button id="endRoom" hidden>End room</button>
+        <button id="endRoom" class="danger" hidden>End room</button>
     </div>
-    <p id="info"></p>
 </main>
 <script type="module" src="/web/room.js"></script>
 </body>
