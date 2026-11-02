@@ -19,6 +19,7 @@ const MAX_STRIKES = 5
 const MAX_CLIENTS_PER_ROOM = 50
 /** A client this far behind on reading is dropped rather than buffering every state for it. */
 const MAX_BUFFERED_BYTES = 1_000_000
+const BROADCAST_DELAY_MS = 50
 const WEB_DIR = join(import.meta.dirname, '..', 'web')
 const HLS_JS = join(import.meta.dirname, '..', 'node_modules', 'hls.js', 'dist', 'hls.min.js')
 const CONTENT_TYPES: Record<string, string> = {
@@ -36,6 +37,8 @@ const auth = createAuth(required('HOST_PASSWORD'), PUBLIC_URL.startsWith('https:
 const rooms = new Map<string, Room>()
 const clients = new Map<string, Set<Client>>()
 const emptySince = new Map<string, number>()
+const pendingBroadcasts = new Set<Room>()
+let flushTimer: NodeJS.Timeout | undefined
 const conductor = createConductor(jf, rooms, broadcast)
 let jellyfinError: string | null = 'Not checked yet'
 
@@ -68,7 +71,21 @@ function send(client: Client, data: string): void {
     client.ws.send(data)
 }
 
+/** Coalesces state fan-out: at most one broadcast per room per BROADCAST_DELAY_MS, however many changes. */
 function broadcast(room: Room): void {
+    pendingBroadcasts.add(room)
+    flushTimer ??= setTimeout(flushBroadcasts, BROADCAST_DELAY_MS)
+}
+
+function flushBroadcasts(): void {
+    flushTimer = undefined
+    for (const room of pendingBroadcasts) {
+        sendState(room)
+    }
+    pendingBroadcasts.clear()
+}
+
+function sendState(room: Room): void {
     const messages = { host: stateMessage(room, true), guest: stateMessage(room, false) }
     for (const client of clients.get(room.id) ?? []) {
         send(client, client.isHost ? messages.host : messages.guest)
