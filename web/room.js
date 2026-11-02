@@ -50,6 +50,7 @@ $('join').onsubmit = (event) => {
     store('wp_name', name)
     $('join').hidden = true
     $('player').hidden = false
+    video.play().catch(() => {}) // user gesture: unlocks later programmatic play() on iOS
     socket = connectRoom(roomId, name, onMessage)
     cast = setupCast({ roomId, deviceId, getState: () => state })
     setInterval(syncNow, 1000)
