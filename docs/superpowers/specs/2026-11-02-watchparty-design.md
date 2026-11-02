@@ -94,8 +94,10 @@ Allowed paths only:
 
 `itemId` must be in that room's queue, otherwise 404.
 HLS and stop requests must carry a `PlaySessionId` that a `PlaybackInfo` call in the same room returned, otherwise 403.
-Each room allows 24 active play sessions (429 beyond that); a session with no HLS request for 120s is dropped, as Jellyfin kills such idle transcodes too.
-HLS playlists use relative URLs, so segments naturally come back through the proxy; if Jellyfin returns absolute URLs or `api_key` query params, the proxy rewrites/strips them.
+A `PlaySessionId` stays usable until it is stopped (or the room is deleted), so a player paused for a long time can resume; each room keeps at most 500, dropping the least recently used.
+Each room allows 24 active play sessions: `PlaybackInfo` returns 429 while 24 sessions made an HLS request within the last 120s; idle sessions stop counting, as Jellyfin kills such idle transcodes too.
+HLS and stop requests are forwarded with `DeviceId` set to the `PlaySessionId`, since Jellyfin keys transcode jobs on both and a guest-chosen `DeviceId` would start extra jobs.
+HLS playlists use relative URLs, so segments naturally come back through the proxy; the proxy strips `api_key`/`ApiKey` query params from playlists and from `PlaybackInfo`'s `TranscodingUrl` and subtitle `DeliveryUrl`s, drops filesystem `Path`s, and removes any remaining literal API key from text responses.
 Responses are streamed (no buffering whole segments).
 
 Host-only endpoints (search library, add to queue) call `jellyfin` directly behind host auth.
@@ -133,7 +135,7 @@ Host adds active Jellyfin sessions (from `GET /Sessions`, filtered to sessions w
   Falling behind by up to the time since the last expectation (+2s) counts as buffering, not a user seek.
 * Trusted devices (host ticks **My device**) bypass `guestControl`.
 * Wrong item playing → re-issue `PlayNow`.
-* Command not reflected after 3 attempts, or session disappears → mark `out-of-sync` in host UI, stop commanding it; host can re-add.
+* Command not reflected after 3 attempts, or session missing from 5 consecutive polls → mark `out-of-sync` in host UI, stop commanding it; host can re-add.
 
 Expected native sync precision: ~3s (limited by client progress reporting). Web clients: ~0.3s.
 
@@ -150,8 +152,8 @@ Expected native sync precision: ~3s (limited by client progress reporting). Web 
 |---|---|
 | Web client buffers | Room continues; client catches up via rate/seek |
 | Web client disconnects | Auto-reconnect with backoff; resyncs to room state |
-| Room empty (no web clients, no native sessions) | Deleted after 30 min |
-| Native session ignores commands / goes offline | 3 retries → `out-of-sync`, flagged to host |
+| Room idle (no web clients, no *syncing* native sessions) | Deleted after 30 min |
+| Native session ignores commands / goes offline | 3 ignored commands or 5 consecutive polls without the session → `out-of-sync`, flagged to host |
 | Jellyfin unreachable / bad API key | Startup check fails loudly in logs; host UI shows error; guests see "server unavailable" |
 | Proxy request for item not in queue | 404 |
 | Guest command while `guestControl` off | Rejected, client gets current state back |
@@ -173,12 +175,13 @@ Expected native sync precision: ~3s (limited by client progress reporting). Web 
 * Proxy allowlist as above; no library browsing for guests.
 * Websocket `Origin` must match the `Host` header or `PUBLIC_URL`'s host.
 * Websocket rate limit: 20 messages per second per client; excess dropped; a client over the limit for 5 consecutive seconds is disconnected.
+* At most 50 websocket clients per room (further upgrades are refused); a client with over 1 MB of unsent data is disconnected instead of buffering more broadcasts; a `hello` that does not change the name is not broadcast.
 * Display names length-limited and escaped.
 
 ## Testing
 
 * Unit (`node:test`): `sync` decisions at threshold boundaries, `room` transitions (incl. permission rejects, queue advance, position math), native drift/user-action detection.
-* Integration: conductor against a fake Jellyfin `/Sessions` HTTP server (command issued, retries, out-of-sync, user-action detection). Proxy allowlist (item in/out of queue).
+* Integration: conductor against a stubbed Jellyfin client (command issued, retries, out-of-sync, user-action detection, seek lead). Proxy allowlist (item in/out of queue).
 * Manual: real Jellyfin with 2 desktop browsers, a phone, Chromecast, and one native app (Android TV or Jellyfin Media Player) in one room; verify sync, per-viewer subs/audio, queue advance, guest-control toggle.
 
 ## Risks

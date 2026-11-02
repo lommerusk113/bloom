@@ -45,7 +45,7 @@ Watchparty never encodes video itself. Every guest gets an HLS stream from Jelly
 
 Native apps sync to within about 3 seconds (they report their position rarely); browsers within about 0.3 seconds.
 
-Each room allows 24 active streams; a stream that makes no requests for 2 minutes stops counting. Each websocket client may send 20 messages per second; extra messages are dropped and a client that keeps flooding for 5 seconds is disconnected.
+Each room allows 24 active streams; a stream that makes no requests for 2 minutes stops counting but can still resume, so long pauses are fine. Each room allows 50 open browser tabs. Each websocket client may send 20 messages per second; extra messages are dropped and a client that keeps flooding for 5 seconds is disconnected.
 
 ## Development
 
