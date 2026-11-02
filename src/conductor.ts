@@ -2,12 +2,13 @@ import { normalizeId, TICKS_PER_SECOND, type Jellyfin, type JfSession } from './
 import { apply, currentPosition, type Command, type NativeSession, type Room } from './room.ts'
 
 const COMMAND_COOLDOWN_MS = 3_000
-const PLAY_COOLDOWN_MS = 4_000
+const PLAY_COOLDOWN_MS = 15_000
 const SEEK_COOLDOWN_MS = 10_000
 const USER_GRACE_MS = 5_000
-const SEEK_THRESHOLD = 2
+const SEEK_THRESHOLD = 3
 const USER_JUMP = 5
 const MAX_ATTEMPTS = 3
+const MAX_LEAD = 5
 
 type Expectation = { position: number; paused: boolean; at: number }
 
@@ -29,9 +30,20 @@ export type Track = {
     lastSeekAt: number
     lastKind: NativeAction['kind'] | null
     expect: Expectation | null
+    /** Seconds added to native seeks while playing, learned from where the client lands. */
+    lead: number
+    pendingSeek: boolean
+    /** False from our last command until the session is seen in sync. */
+    confirmed: boolean
 }
 
-export const newTrack = (): Track => ({ attempts: 0, lastCmdAt: 0, lastSeekAt: 0, lastKind: null, expect: null })
+export const newTrack = (): Track => ({
+    attempts: 0, lastCmdAt: 0, lastSeekAt: 0, lastKind: null, expect: null, lead: 0, pendingSeek: false, confirmed: true,
+})
+
+/** New seek lead after a seek landed `driftAfterSeek` seconds off the room (negative = behind). */
+export const adaptLead = (lead: number, driftAfterSeek: number): number =>
+    Math.min(MAX_LEAD, Math.max(0, lead - driftAfterSeek))
 
 const isCommand = (a: NativeAction): a is CommandAction =>
     a.kind === 'play' || a.kind === 'pause' || a.kind === 'unpause' || a.kind === 'seek'
@@ -61,14 +73,16 @@ function detectUserAction(s: JfSession, t: Track, now: number): Command | null {
 
     const e = t.expect
     const checkIn = checkInTime(s)
-    if (!e || checkIn <= e.at || checkIn <= t.lastCmdAt + USER_GRACE_MS) {
+    if (!t.confirmed || !e || checkIn <= e.at || checkIn <= t.lastCmdAt + USER_GRACE_MS) {
         return null
     }
 
     if (reportedPaused(s) !== e.paused) {
         return { type: reportedPaused(s) ? 'pause' : 'play' }
     }
-    if (Math.abs(reportedPosition(s) - extrapolate(e.position, e.paused, e.at, checkIn)) > USER_JUMP) {
+    // falling behind by up to the time since the expectation (+2s) is buffering, not a user seek
+    const drift = reportedPosition(s) - extrapolate(e.position, e.paused, e.at, checkIn)
+    if (drift > USER_JUMP || -drift > Math.max(USER_JUMP, (checkIn - e.at) / 1000 + 2)) {
         return { type: 'seek', position: extrapolate(reportedPosition(s), false, checkIn, now) }
     }
 
@@ -110,7 +124,7 @@ export function decide(s: JfSession | undefined, room: Room, t: Track, now: numb
     }
     const seekCooling = now - t.lastSeekAt < SEEK_COOLDOWN_MS && room.updatedAt <= t.lastSeekAt
 
-    return seekCooling ? { kind: 'wait' } : { kind: 'seek', position: target }
+    return seekCooling ? { kind: 'wait' } : { kind: 'seek', position: target + (room.playing ? t.lead : 0) }
 }
 
 function expectationAfter(action: CommandAction, room: Room, position: number, now: number): Expectation {
@@ -157,7 +171,15 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
         const t = tracks.get(key) ?? newTrack()
         tracks.set(key, t)
 
+        if (t.pendingSeek && s && checkInTime(s) > t.lastSeekAt) {
+            t.lead = adaptLead(t.lead, believed(s, t, now).position - currentPosition(room, now))
+            t.pendingSeek = false
+        }
+
         const action = decide(s, room, t, now)
+        if (isCommand(action) && t.lastKind !== action.kind) {
+            t.attempts = 0
+        }
         if (action.kind === 'lost' || (isCommand(action) && t.attempts >= MAX_ATTEMPTS)) {
             ns.status = 'out-of-sync'
             tracks.delete(key)
@@ -171,8 +193,10 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
             t.attempts++
             t.lastCmdAt = now
             t.lastKind = action.kind
+            t.confirmed = false
             if (action.kind === 'seek') {
                 t.lastSeekAt = now
+                t.pendingSeek = room.playing
             }
             t.expect = expectationAfter(action, room, position, now)
             return
@@ -180,6 +204,7 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
 
         if (action.kind === 'none') {
             t.attempts = 0
+            t.confirmed = true
         }
         if (action.kind === 'user' && apply(room, action.cmd, ns.trusted, now)) {
             onChange(room)
