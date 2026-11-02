@@ -16,6 +16,7 @@ export function setupCast({ roomId, deviceId, getState }) {
     let seekLead = 3
     let pendingSeek = false
     let retryDelay = 0 // grows while loads keep failing
+    let loading = false
 
     function init() {
         const context = cast.framework.CastContext.getInstance()
@@ -86,10 +87,13 @@ export function setupCast({ roomId, deviceId, getState }) {
                 loadedItem = item.id
                 lastAction = Date.now()
                 pendingSeek = false
+                loading = true
                 load(item, target, room.playing).then(() => {
-                    retryDelay = 0
+                    loading = false
+                    lastAction = Date.now()
                 }, (err) => {
                     console.error('Cast load failed', err)
+                    loading = false
                     loadedItem = null
                     retryDelay = nextBackoff(retryDelay, COOLDOWN_MS, MAX_RETRY_MS) // 3s, 6s ... 30s
                     lastAction = Date.now()
@@ -97,8 +101,15 @@ export function setupCast({ roomId, deviceId, getState }) {
                 return
             }
             if (!player.isMediaLoaded) {
+                if (!loading && Date.now() - lastAction > 3 * COOLDOWN_MS) {
+                    // the receiver dropped the media (error, stopped from Google Home): load it again
+                    loadedItem = null
+                    retryDelay = nextBackoff(retryDelay, COOLDOWN_MS, MAX_RETRY_MS)
+                    lastAction = Date.now()
+                }
                 return
             }
+            retryDelay = 0
             if (room.playing === player.isPaused) {
                 // explicit play/pause: playOrPause() toggles and can double-flip while RemotePlayer state lags
                 const media = cast.framework.CastContext.getInstance().getCurrentSession()?.getMediaSession()
