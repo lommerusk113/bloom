@@ -62,6 +62,7 @@ Current position = `position + (playing ? (now - updatedAt) / 1000 : 0)`.
 
 Room commands: `play`, `pause`, `seek(p)`, `next`, `jump(index)`, `queueAdd/Remove/Move` (host only), `setGuestControl` (host only).
 When `guestControl` is false, guest `play/pause/seek/next/jump` are rejected.
+The host can end a room (`DELETE /api/rooms/:id`, **End room** in the host UI): every socket closes with 4404, syncing native sessions are paused, and the room's recently used transcodes are stopped.
 
 ## Playback & transcoding
 
@@ -114,7 +115,7 @@ Host-only endpoints (search library, add to queue) call `jellyfin` directly behi
 * Local buffering does **not** pause the room; client catches up after.
 * User actions (play/pause/seek/next) are sent as commands; UI reflects server-confirmed state.
 * Audio/subtitle/bitrate picker per viewer.
-* Host UI: password login, library search, queue editing, guest-control toggle, native session picker with per-session status.
+* Host UI: password login, library search, queue editing, guest-control toggle, native session picker with per-session status, end room.
 
 ### Chromecast
 

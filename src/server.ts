@@ -6,7 +6,7 @@ import WebSocket, { WebSocketServer } from 'ws'
 import { createAuth } from './auth.ts'
 import { createConductor } from './conductor.ts'
 import { createJellyfin } from './jellyfin.ts'
-import { proxyRequest, readBody } from './proxy.ts'
+import { proxyRequest, readBody, stopRoomStreams } from './proxy.ts'
 import { apply, createRoom, parseCommand, sweepRooms, type Room } from './room.ts'
 
 /** windowStart/count/strikes: websocket rate limit state, see overLimit. */
@@ -176,6 +176,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         rooms.set(id, createRoom(id, Date.now()))
         return sendJson(res, 200, { id })
     }
+    const ending = method === 'DELETE' ? /^\/api\/rooms\/([\w-]+)$/.exec(path) : null
+    if (ending) {
+        const room = rooms.get(ending[1])
+        if (!room) {
+            return sendJson(res, 404, { error: 'Room not found' })
+        }
+        await endRoom(room)
+        return sendJson(res, 200, { ok: true })
+    }
     if (method === 'GET' && path === '/api/search') {
         return sendJson(res, 200, await jf.search(url.searchParams.get('q') ?? ''))
     }
@@ -199,6 +208,21 @@ const server = createServer((req, res) => {
         }
     })
 })
+
+/** Host ends the room: everyone is disconnected as from a deleted room, native players pause, transcodes stop. */
+async function endRoom(room: Room): Promise<void> {
+
+    rooms.delete(room.id)
+    emptySince.delete(room.id)
+    conductor.forgetRoom(room.id)
+    for (const client of clients.get(room.id) ?? []) {
+        client.ws.close(4404, 'Room ended')
+    }
+    clients.delete(room.id)
+
+    const natives = room.nativeSessions.filter(n => n.status === 'syncing').map(n => jf.pause(n.sessionId))
+    await Promise.allSettled([...natives, stopRoomStreams(room, jf)])
+}
 
 // --- websockets ---
 

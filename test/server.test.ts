@@ -139,6 +139,18 @@ test('a socket to an unknown room is closed with 4404', async () => {
     assert.equal(code, 4404)
 })
 
+test('only the host can end a room, which disconnects everyone with 4404', async () => {
+    const cookie = await login()
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
+    const guest = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`)
+    await once(guest, 'open')
+    assert.equal((await fetch(`${BASE}/api/rooms/${id}`, { method: 'DELETE' })).status, 403)
+    const closed = once(guest, 'close')
+    assert.equal((await fetch(`${BASE}/api/rooms/${id}`, { method: 'DELETE', headers: { cookie } })).status, 200)
+    assert.equal((await closed)[0], 4404)
+    assert.equal((await fetch(`${BASE}/api/rooms/${id}`, { method: 'DELETE', headers: { cookie } })).status, 404)
+})
+
 test('a malformed upgrade target does not crash the server', async () => {
     const socket = connect(PORT, '127.0.0.1')
     await once(socket, 'connect')

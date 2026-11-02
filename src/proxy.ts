@@ -35,6 +35,15 @@ function playSessionId(params: URLSearchParams): string | undefined {
     return undefined
 }
 
+/** Stops the room's recently used transcodes, e.g. when the host ends the room; their players can no longer stop them through the proxy. */
+// ponytail: only sessions used within SESSION_IDLE_MS; Jellyfin kills older idle transcodes itself
+export async function stopRoomStreams(room: Room, jf: Jellyfin, now = Date.now()): Promise<void> {
+    const recent = [...(sessions.get(room) ?? [])].filter(([, seen]) => now - seen <= SESSION_IDLE_MS).map(([id]) => id)
+    sessions.delete(room)
+    await Promise.allSettled(recent.map(id =>
+        jf.raw(`/Videos/ActiveEncodings?${new URLSearchParams({ DeviceId: id, PlaySessionId: id })}`, { method: 'DELETE' })))
+}
+
 /** The normalized item id an allowed path refers to, or null when the path is not allowed. */
 export function allowedItemId(method: string, path: string): string | null {
     for (const [allowedMethod, pattern] of ALLOWED) {

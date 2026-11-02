@@ -79,6 +79,17 @@ function manage() {
     $('link').value = url
     $('open').href = url
     $('copy').onclick = () => navigator.clipboard.writeText(url)
+    $('endRoom').onclick = async () => {
+        if (!confirm('End the room for everyone?')) {
+            return
+        }
+        try {
+            await api(`/api/rooms/${roomId}`, { method: 'DELETE' })
+            location.search = ''
+        } catch (err) {
+            $('status').textContent = err.message
+        }
+    }
 
     socket = connectRoom(roomId, 'Host', (msg) => {
         if (msg.type === 'welcome') {

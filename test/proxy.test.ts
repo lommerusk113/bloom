@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { Jellyfin } from '../src/jellyfin.ts'
-import { allowedItemId, proxyRequest, stripApiKeys } from '../src/proxy.ts'
+import { allowedItemId, proxyRequest, stopRoomStreams, stripApiKeys } from '../src/proxy.ts'
 import { createRoom, type Room } from '../src/room.ts'
 
 const ITEM = '0123456789abcdef0123456789abcdef'
@@ -167,6 +167,18 @@ test('proxy stops only the room\'s transcodes, once', async (t) => {
     assert.equal(calls[1][0], '/Videos/ActiveEncodings?PlaySessionId=p1&DeviceId=p1')
     assert.equal(calls[1][1].method, 'DELETE')
     assert.equal((await stop()).status, 403)
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/master.m3u8?PlaySessionId=p1`)).status, 403)
+})
+
+test('stopRoomStreams stops the room\'s recent transcodes and revokes its play sessions', async (t) => {
+    const room = createRoom('r', 0)
+    room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
+    const calls: Array<[string, RequestInit]> = []
+    const jf = fakeJellyfin(calls)
+    const base = await serve(t, room, jf)
+    await playbackInfo(base)
+    await stopRoomStreams(room, jf)
+    assert.deepEqual(calls.slice(1).map(([path, init]) => [path, init.method]), [['/Videos/ActiveEncodings?DeviceId=p1&PlaySessionId=p1', 'DELETE']])
     assert.equal((await fetch(`${base}/Videos/${ITEM}/master.m3u8?PlaySessionId=p1`)).status, 403)
 })
 
