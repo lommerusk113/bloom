@@ -28,6 +28,7 @@ Watchparty never encodes video itself. Guests get whatever Jellyfin would serve 
 |---|---|---|
 | `JELLYFIN_URL` | yes | Internal Jellyfin URL, e.g. `http://jellyfin:8096` |
 | `JELLYFIN_API_KEY` | yes | API key from step 1 |
+| `JELLYFIN_USER_ID` | no | Run as this Jellyfin user; set if PlaybackInfo or remote control fails with only an API key; also limits libraries to that user's |
 | `HOST_PASSWORD` | yes | Password for the host page |
 | `PUBLIC_URL` | no | External URL; `https://` enables the Secure cookie flag |
 | `PORT` | no | Default `8080` |

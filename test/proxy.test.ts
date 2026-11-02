@@ -89,3 +89,20 @@ test('proxy returns 502 for non-JSON PlaybackInfo on success', async () => {
     assert.equal(res.status, 502)
     close()
 })
+
+test('proxy overwrites UserId when the server runs as a user', async () => {
+    const room = createRoom('r', 0)
+    room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
+    const paths: string[] = []
+    const jf = {
+        userId: 'me',
+        raw: async (path: string) => {
+            paths.push(path)
+            return new Response('#EXTM3U\n')
+        },
+    } as unknown as Jellyfin
+    const { base, close } = await serve(room, jf)
+    await fetch(`${base}/Videos/${ITEM}/master.m3u8?userid=evil&a=1`)
+    assert.equal(paths[0], `/Videos/${ITEM}/master.m3u8?a=1&UserId=me`)
+    close()
+})

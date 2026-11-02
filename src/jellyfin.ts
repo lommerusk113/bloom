@@ -28,8 +28,8 @@ export type Jellyfin = ReturnType<typeof createJellyfin>
 
 export const normalizeId = (id: string): string => id.replaceAll('-', '').toLowerCase()
 
-/** Requires Jellyfin 10.9+ (user-less /Items with an API key). */
-export function createJellyfin(baseUrl: string, apiKey: string) {
+/** Requires Jellyfin 10.9+ (user-less /Items with an API key) unless userId is given. */
+export function createJellyfin(baseUrl: string, apiKey: string, userId = process.env.JELLYFIN_USER_ID || undefined) {
 
     const auth = `MediaBrowser Token="${apiKey}"`
 
@@ -53,20 +53,27 @@ export function createJellyfin(baseUrl: string, apiKey: string) {
 
     const session = (id: string) => `/Sessions/${encodeURIComponent(id)}/Playing`
     const ticks = (seconds: number) => String(Math.round(seconds * TICKS_PER_SECOND))
+    const listItems = (query: URLSearchParams) => {
+        if (userId) {
+            query.set('userId', userId)
+        }
+        return json<{ Items: JfItem[] }>(`/Items?${query}`)
+    }
 
     return {
         raw,
+        userId,
         systemInfo: () => json<{ ServerName: string; Version: string }>('/System/Info'),
 
         async search(term: string): Promise<Array<{ id: string; name: string; type: string }>> {
             const query = new URLSearchParams({ searchTerm: term, IncludeItemTypes: 'Movie,Series,Season,Episode', Recursive: 'true', Limit: '25' })
-            const res = await json<{ Items: JfItem[] }>(`/Items?${query}`)
+            const res = await listItems(query)
             return res.Items.map(i => ({ id: i.Id, name: label(i), type: i.Type }))
         },
 
         /** Resolves a movie/episode to itself and a series/season to its episodes in order. */
         async queueItems(id: string): Promise<QueueItem[]> {
-            const found = await json<{ Items: JfItem[] }>(`/Items?Ids=${encodeURIComponent(id)}`)
+            const found = await listItems(new URLSearchParams({ Ids: id }))
             const item = found.Items[0]
             if (!item) {
                 return []
@@ -74,7 +81,7 @@ export function createJellyfin(baseUrl: string, apiKey: string) {
             let items = [item]
             if (item.Type === 'Series' || item.Type === 'Season') {
                 const query = new URLSearchParams({ ParentId: item.Id, IncludeItemTypes: 'Episode', Recursive: 'true', IsMissing: 'false', ExcludeLocationTypes: 'Virtual', SortBy: 'ParentIndexNumber,IndexNumber' })
-                items = (await json<{ Items: JfItem[] }>(`/Items?${query}`)).Items
+                items = (await listItems(query)).Items
             }
             return items.map(i => ({ id: i.Id, name: label(i), runtime: (i.RunTimeTicks ?? 0) / TICKS_PER_SECOND }))
         },

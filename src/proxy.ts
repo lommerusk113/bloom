@@ -75,6 +75,15 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
         return
     }
 
+    if (jf.userId) {
+        for (const name of [...url.searchParams.keys()]) {
+            if (name.toLowerCase() === 'userid') {
+                url.searchParams.delete(name)
+            }
+        }
+        url.searchParams.set('UserId', jf.userId)
+    }
+
     const abort = new AbortController()
     res.on('close', () => abort.abort())
     const headers: Record<string, string> = { 'accept-encoding': 'identity' }
