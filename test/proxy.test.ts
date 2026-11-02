@@ -106,7 +106,7 @@ test('proxy strips api keys and paths from PlaybackInfo', async (t) => {
     assert.equal(source.MediaStreams[0].DeliveryUrl, '/Videos/x/m/Subtitles/2/0/Stream.vtt')
 })
 
-test('proxy redacts the literal api key from every text body', async (t) => {
+test('proxy redacts the literal api key from playlists and PlaybackInfo', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     const jf = {

@@ -97,7 +97,7 @@ HLS and stop requests must carry a `PlaySessionId` that a `PlaybackInfo` call in
 A `PlaySessionId` stays usable until it is stopped (or the room is deleted), so a player paused for a long time can resume; each room keeps at most 500, dropping the least recently used.
 Each room allows 24 active play sessions: `PlaybackInfo` returns 429 while 24 sessions made an HLS request within the last 120s; idle sessions stop counting, as Jellyfin kills such idle transcodes too.
 HLS and stop requests are forwarded with `DeviceId` set to the `PlaySessionId`, since Jellyfin keys transcode jobs on both and a guest-chosen `DeviceId` would start extra jobs.
-HLS playlists use relative URLs, so segments naturally come back through the proxy; the proxy strips `api_key`/`ApiKey` query params from playlists and from `PlaybackInfo`'s `TranscodingUrl` and subtitle `DeliveryUrl`s, drops filesystem `Path`s, and removes any remaining literal API key from text responses.
+HLS playlists use relative URLs, so segments naturally come back through the proxy; the proxy strips `api_key`/`ApiKey` query params from playlists and from `PlaybackInfo`'s `TranscodingUrl` and subtitle `DeliveryUrl`s, drops filesystem `Path`s, and removes any remaining literal API key from playlists and `PlaybackInfo` responses (segments and subtitles pass through untouched).
 Responses are streamed (no buffering whole segments).
 
 Host-only endpoints (search library, add to queue) call `jellyfin` directly behind host auth.
