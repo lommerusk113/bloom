@@ -125,6 +125,15 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
     if (HLS.test(url.pathname)) {
         playSessions.set(id!, now)
     }
+    if (stop || HLS.test(url.pathname)) {
+        // Jellyfin keys transcode jobs on DeviceId+PlaySessionId: a guest-chosen DeviceId would start a new job per value
+        for (const name of [...url.searchParams.keys()]) {
+            if (name.toLowerCase() === 'deviceid') {
+                url.searchParams.delete(name)
+            }
+        }
+        url.searchParams.set('DeviceId', id!)
+    }
     if (/\/PlaybackInfo$/i.test(url.pathname) && playSessions.size >= MAX_SESSIONS) {
         res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Too many active streams in this room' }))
         return

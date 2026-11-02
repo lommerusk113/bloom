@@ -75,7 +75,7 @@ test('proxy forwards queued items, strips keys and adds CORS', async () => {
     assert.equal(res.status, 200)
     assert.equal(res.headers.get('access-control-allow-origin'), '*')
     assert.equal(await res.text(), '#EXTM3U\nmain.m3u8?x=1\n')
-    assert.equal(calls[1][0], `/Videos/${ITEM}/master.m3u8?DeviceId=d1&PlaySessionId=p1`)
+    assert.equal(calls[1][0], `/Videos/${ITEM}/master.m3u8?PlaySessionId=p1&DeviceId=p1`)
     assert.equal(new Headers(calls[1][1].headers).get('accept-encoding'), 'identity')
     close()
 })
@@ -168,10 +168,27 @@ test('proxy stops only the room\'s transcodes, once', async () => {
     assert.equal((await stop()).status, 403)
     await playbackInfo(base)
     assert.equal((await stop()).status, 204)
-    assert.equal(calls[1][0], '/Videos/ActiveEncodings?DeviceId=d&PlaySessionId=p1')
+    assert.equal(calls[1][0], '/Videos/ActiveEncodings?PlaySessionId=p1&DeviceId=p1')
     assert.equal(calls[1][1].method, 'DELETE')
     assert.equal((await stop()).status, 403)
     assert.equal((await fetch(`${base}/Videos/${ITEM}/master.m3u8?PlaySessionId=p1`)).status, 403)
+    close()
+})
+
+test('proxy pins DeviceId to the PlaySessionId whatever the guest sends', async () => {
+    const room = createRoom('r', 0)
+    room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
+    const calls: Array<[string, RequestInit]> = []
+    const { base, close } = await serve(room, fakeJellyfin(calls))
+    await playbackInfo(base)
+    await fetch(`${base}/Videos/${ITEM}/main.m3u8?deviceid=a&DEVICEID=b&PlaySessionId=p1`)
+    await fetch(`${base}/Videos/${ITEM}/hls1/main/3.mp4?PlaySessionId=p1&DeviceId=c`)
+    await fetch(`${base}/Videos/ActiveEncodings?PlaySessionId=p1&deviceId=d`, { method: 'DELETE' })
+    for (const [path] of calls.slice(1)) {
+        const params = new URL(path, 'http://x').searchParams
+        assert.deepEqual([...params].filter(([name]) => name.toLowerCase() === 'deviceid'), [['DeviceId', 'p1']], path)
+    }
+    assert.equal(calls.length, 4)
     close()
 })
 
