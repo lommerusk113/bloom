@@ -55,6 +55,16 @@ export function allowedItemId(method: string, path: string): string | null {
     return null
 }
 
+/** Turns ASS override codes Jellyfin leaves in converted WebVTT into VTT tags, or drops them: {\i1}x{\i0} → <i>x</i>. */
+export function cleanVtt(vtt: string): string {
+    return vtt
+        .replace(/\{\\([ibu])1\}/g, '<$1>')
+        .replace(/\{\\([ibu])0?\}/g, '</$1>')
+        .replace(/\{\\[^}]*\}/g, '')
+        .replace(/\\N/g, '\n')
+        .replace(/\\h/g, ' ')
+}
+
 export function stripApiKeys(playlist: string): string {
     return playlist.replace(/([?&])(?:api_key|apikey)=[^&\s"]*(&?)/gi, (_, sep: string, amp: string) => (amp ? sep : ''))
 }
@@ -181,6 +191,12 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
         if (value) {
             out[name] = value
         }
+    }
+
+    if (url.pathname.toLowerCase().endsWith('.vtt')) {
+        delete out['content-length']
+        res.writeHead(upstream.status, out).end(cleanVtt(await upstream.text()))
+        return
     }
 
     if (url.pathname.toLowerCase().endsWith('.m3u8')) {

@@ -38,8 +38,6 @@
                 <input id="q" type="search" placeholder="Search" required aria-label="Search the library">
             </form>
             <div class="appbar-actions">
-                <a id="open" class="button" target="_blank" rel="noopener">Open player ↗</a>
-                <button id="inviteButton" class="primary">Invite</button>
                 <details class="menu">
                     <summary aria-label="More options">⋯</summary>
                     <div class="menu-panel">
@@ -70,6 +68,20 @@
             </div>
 
             <aside class="sidebar">
+                <div class="panel invite">
+                    <h2>Invite</h2>
+                    <div class="row">
+                        <input id="link" readonly aria-label="Guest link">
+                        <button id="copy" class="primary">Copy</button>
+                    </div>
+                    <a id="open" class="button open-player" target="_blank" rel="noopener">▶ Open player</a>
+                    <form id="passwordForm" class="row">
+                        <input id="roomPassword" placeholder="Password (optional)" maxlength="100" autocomplete="off" aria-label="Room password">
+                        <button id="savePassword">Set</button>
+                    </form>
+                    <p id="passwordNote" class="muted small"></p>
+                    <label class="check"><input id="guestControl" type="checkbox"> Guests may pause, seek and skip</label>
+                </div>
                 <div class="panel">
                     <h2 id="nowHeading">Nothing playing</h2>
                     <div class="now">
@@ -93,24 +105,6 @@
 
         <dialog id="details" class="dialog details"></dialog>
 
-        <dialog id="invite" class="dialog">
-            <form method="dialog" class="dialog-close"><button aria-label="Close">✕</button></form>
-            <h2>Invite people</h2>
-            <p class="muted">Anyone with this link can join, no Jellyfin account needed.</p>
-            <div class="row">
-                <input id="link" readonly aria-label="Guest link">
-                <button id="copy" class="primary">Copy link</button>
-            </div>
-            <form id="passwordForm" class="row">
-                <input id="roomPassword" placeholder="Room password (optional)" maxlength="100" autocomplete="off" aria-label="Room password">
-                <button id="savePassword">Set password</button>
-            </form>
-            <p id="passwordNote" class="muted"></p>
-            <label class="check"><input id="guestControl" type="checkbox"> Guests may pause, seek and skip</label>
-            <div class="row dialog-actions">
-                <a id="openFromInvite" class="button" target="_blank" rel="noopener">Open player ↗</a>
-            </div>
-        </dialog>
     </section>
 </main>
 <script type="module" src="/web/host.js"></script>

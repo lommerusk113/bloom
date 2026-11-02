@@ -24,6 +24,7 @@ let pendingSeek = false // a seek while playing whose landing drift hasn't been 
 let lastSeekedAt = 0
 let stalled = false     // buffering: currentTime frozen while not seeking
 let myName = ''
+let personal = false // reloading for this viewer's own audio/subtitle/quality pick: catch up alone, don't hold the room
 
 function recall(key) {
     try {
@@ -126,6 +127,7 @@ function onMessage(msg) {
         $('status').textContent = ''
     }
     if (item && current?.itemId !== item.id) {
+        personal = false // a new item: everyone loads, the room waits
         prefs.audio = null
         prefs.subs = null
         load(item.id)
@@ -177,7 +179,8 @@ async function load(itemId) {
     }
     current = { itemId, source: null, last: current?.itemId === itemId ? (current.source ?? current.last) : null }
     try {
-        const source = await playbackInfo(roomId, itemId, deviceProfile(video, safeItem === itemId), { deviceId, audio: prefs.audio, subs, bitrate: prefs.bitrate })
+        const known = current.last // this item's previous source: its Id makes Jellyfin honour the audio/subtitle pick
+        const source = await playbackInfo(roomId, itemId, deviceProfile(video, safeItem === itemId), { deviceId, audio: prefs.audio, subs, bitrate: prefs.bitrate, mediaSourceId: known?.Id ?? null })
         if (token !== loadToken) {
             stopStream(roomId, source.TranscodingUrl) // superseded: don't leak its transcode
             return
@@ -306,6 +309,7 @@ $('audio').onchange = () => {
         return // stream unloaded (empty queue or room gone)
     }
     prefs.audio = Number($('audio').value)
+    personal = true
     load(current.itemId)
 }
 $('subs').onchange = () => {
@@ -316,6 +320,7 @@ $('subs').onchange = () => {
     prefs.subs = Number($('subs').value)
     const source = current.source ?? current.last
     if (isImageSub(source, previous) || isImageSub(source, prefs.subs)) {
+        personal = true
         load(current.itemId)
     } else {
         showSubtitles()
@@ -324,6 +329,7 @@ $('subs').onchange = () => {
 $('quality').onchange = () => {
     prefs.bitrate = Number($('quality').value) || null
     if (current) {
+        personal = true
         load(current.itemId)
     }
 }
@@ -442,9 +448,13 @@ function render() {
 video.addEventListener('waiting', () => { stalled = true })
 video.addEventListener('playing', () => {
     stalled = false
+    personal = false
     retry = { itemId: null, delay: 0 } // the stream works: the next failure starts the backoff over
 })
-video.addEventListener('canplay', () => { stalled = false })
+video.addEventListener('canplay', () => {
+    stalled = false
+    personal = false
+})
 video.addEventListener('error', () => {
     if (!hls && current?.source) { // native HLS: hls.js reports its own errors
         const code = video.error?.code
@@ -474,8 +484,9 @@ function isBuffered(time) {
 let reportedBuffering = false
 
 /** Tells the room this player is loading, so it waits instead of running ahead. */
-function reportBuffering(buffering) {
-    $('spinner').hidden = !buffering
+function reportBuffering(loading) {
+    $('spinner').hidden = !loading
+    const buffering = loading && !personal
     if (buffering !== reportedBuffering) {
         reportedBuffering = buffering
         socket.send({ type: 'buffering', value: buffering })

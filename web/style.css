@@ -219,3 +219,9 @@ h2.shelf-title { margin: 0 auto 0 0; }
     .hero { min-height: 300px; margin: -12px -12px 20px; padding: 0 12px 20px; }
     .hero-title { font-size: 1.7em; }
 }
+.sidebar { display: grid; gap: 14px; }
+.invite { display: grid; gap: 8px; }
+.invite h2, .invite p { margin: 0; }
+.open-player { text-align: center; }
+.small { font-size: .85em; }
+.invite .check { margin-top: 2px; }

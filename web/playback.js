@@ -58,8 +58,11 @@ export function deviceProfile(video, safe = false) {
     }
 }
 
-/** Returns the media source with a TranscodingUrl. subs: stream index to burn in, -1 for none, null for Jellyfin's default. */
-export async function playbackInfo(roomId, itemId, profile, { deviceId, audio = null, subs = null, bitrate = null }) {
+/**
+ * Returns the media source with a TranscodingUrl. subs: stream index to burn in, -1 for none, null for Jellyfin's default.
+ * Jellyfin ignores audio and subtitle choices unless mediaSourceId (the source's Id from an earlier call) names the source.
+ */
+export async function playbackInfo(roomId, itemId, profile, { deviceId, audio = null, subs = null, bitrate = null, mediaSourceId = null }) {
     const query = new URLSearchParams({
         DeviceId: deviceId,
         MaxStreamingBitrate: String(bitrate ?? 120_000_000),
@@ -70,6 +73,9 @@ export async function playbackInfo(roomId, itemId, profile, { deviceId, audio = 
         AllowAudioStreamCopy: 'true',
         AutoOpenLiveStream: 'false',
     })
+    if (mediaSourceId) {
+        query.set('MediaSourceId', mediaSourceId)
+    }
     if (audio !== null) {
         query.set('AudioStreamIndex', String(audio))
     }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { Jellyfin } from '../src/jellyfin.ts'
-import { allowedItemId, proxyRequest, stopRoomStreams, stripApiKeys } from '../src/proxy.ts'
+import { allowedItemId, cleanVtt, proxyRequest, stopRoomStreams, stripApiKeys } from '../src/proxy.ts'
 import { createRoom, type Room } from '../src/room.ts'
 
 const ITEM = '0123456789abcdef0123456789abcdef'
@@ -18,6 +18,12 @@ test('allowedItemId accepts streaming paths and rejects the rest', () => {
     assert.equal(allowedItemId('DELETE', `/Videos/${ITEM}/master.m3u8`), null)
     assert.equal(allowedItemId('GET', '/Users'), null)
     assert.equal(allowedItemId('GET', `/Items/${ITEM}/Images/Primary`), null)
+})
+
+test('cleanVtt turns ASS codes into VTT tags and drops the rest', () => {
+    assert.equal(cleanVtt('{\\i1}Sasuke !{\\i0}'), '<i>Sasuke !</i>')
+    assert.equal(cleanVtt('{\\an8}{\\b1}Top{\\b0}\\Nline'), '<b>Top</b>\nline')
+    assert.equal(cleanVtt('{\\pos(10,20)\\c&H00FF00&}plain'), 'plain')
 })
 
 test('stripApiKeys removes keys from playlist urls', () => {

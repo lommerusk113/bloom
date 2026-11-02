@@ -104,8 +104,8 @@ function lobby(rooms) {
 
 function showPassword(password) {
     $('roomPassword').value = password
-    $('savePassword').textContent = password ? 'Change' : 'Set password'
-    $('passwordNote').textContent = password ? `Guests must enter “${password}” to join.` : 'No password: anyone with the link can join.'
+    $('savePassword').textContent = password ? 'Change' : 'Set'
+    $('passwordNote').textContent = password ? `Guests must enter “${password}”.` : 'Anyone with the link can join.'
 }
 
 function manage(room) {
@@ -124,8 +124,6 @@ function manage(room) {
     const url = `${location.origin}/r/${roomId}`
     $('link').value = url
     $('open').href = url
-    $('openFromInvite').href = url
-    $('inviteButton').onclick = () => $('invite').showModal()
     $('copy').onclick = async () => {
         if (navigator.clipboard) {
             await navigator.clipboard.writeText(url)
@@ -135,7 +133,7 @@ function manage(room) {
             document.execCommand('copy')
         }
         $('copy').textContent = 'Copied ✓'
-        setTimeout(() => { $('copy').textContent = 'Copy link' }, 1500)
+        setTimeout(() => { $('copy').textContent = 'Copy' }, 1500)
     }
     $('endRoom').onclick = async () => {
         if (!confirm('End the room for everyone? Guests are disconnected and playback stops.')) {
@@ -158,12 +156,8 @@ function manage(room) {
             state = null
             showStatus('This room no longer exists')
         } else if (msg.type === 'state') {
-            const wasEmpty = state !== null && state.room.queue.length === 0
             state = msg
             render()
-            if (wasEmpty && msg.room.queue.length > 0 && msg.viewers.length === 0) {
-                $('invite').showModal() // first pick and nobody here yet: time to share the link
-            }
         }
     }, true)
 
@@ -528,7 +522,7 @@ function render() {
         return row
     }))
 
-    $('viewers').replaceChildren(...(viewers.length ? viewers.map(v => el('span', 'chip', v)) : [el('span', 'muted', 'Nobody yet — use Invite')]))
+    $('viewers').replaceChildren(...(viewers.length ? viewers.map(v => el('span', 'chip', v)) : [el('span', 'muted', 'Nobody yet — share the link above')]))
 }
 
 start().catch((err) => {
