@@ -16,6 +16,8 @@ let current = null    // { itemId, source } of the loaded stream; source null wh
 let loadToken = 0
 let retry = { itemId: null, delay: 0 } // backoff for consecutive load failures of one item
 let hls = null
+let mediaErrors = 0     // fatal hls.js media errors of the attached source
+let safeItem = null     // item reloaded with the H.264/AAC profile after media errors persisted
 let dragging = false
 let seekLead = 1        // seconds to seek past the target, learned from how far behind seeks land
 let pendingSeek = false // a seek while playing whose landing drift hasn't been measured yet
@@ -105,7 +107,7 @@ async function load(itemId) {
     current = { itemId, source: null }
     $('status').textContent = 'Loading…'
     try {
-        const source = await playbackInfo(roomId, itemId, deviceProfile(video), { deviceId, audio: prefs.audio, subs, bitrate: prefs.bitrate })
+        const source = await playbackInfo(roomId, itemId, deviceProfile(video, safeItem === itemId), { deviceId, audio: prefs.audio, subs, bitrate: prefs.bitrate })
         if (token !== loadToken) {
             stopStream(roomId, source.TranscodingUrl, deviceId) // superseded: don't leak its transcode
             return
@@ -148,6 +150,7 @@ function attach(src) {
     hls?.destroy()
     hls = null
     pendingSeek = false
+    mediaErrors = 0
     if (window.Hls?.isSupported()) {
         const token = loadToken
         hls = new Hls({ startPosition: currentTarget() })
@@ -156,7 +159,7 @@ function attach(src) {
                 return
             }
             if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                hls.recoverMediaError()
+                recoverMedia()
             } else {
                 retryLoad(++loadToken, current.itemId, 'Stream error') // new token: later errors of this hls are ignored
             }
@@ -165,6 +168,25 @@ function attach(src) {
         hls.attachMedia(video)
     } else {
         video.src = src // iPhone Safari: native HLS
+    }
+}
+
+// escalates: recover, swap audio codec and recover, reload as H.264/AAC, give up
+function recoverMedia() {
+    mediaErrors++
+    if (mediaErrors === 1) {
+        hls.recoverMediaError()
+    } else if (mediaErrors === 2) {
+        hls.swapAudioCodec()
+        hls.recoverMediaError()
+    } else if (safeItem !== current.itemId) {
+        safeItem = current.itemId
+        load(current.itemId)
+    } else {
+        hls.destroy()
+        hls = null
+        stopStream(roomId, current.source.TranscodingUrl, deviceId)
+        $('status').textContent = 'This video can’t be played in this browser'
     }
 }
 
