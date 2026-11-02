@@ -1,10 +1,10 @@
-import { median } from './sync.js'
+import { median, nextBackoff } from './sync.js'
 
 /** Reconnecting websocket to a room. onMessage gets every server message except clock pongs. */
 export function connectRoom(roomId, name, onMessage) {
     const samples = []
     let ws = null
-    let retries = 0
+    let delay = 0 // reconnect backoff, 0 while connected
 
     const socket = {
         offset: 0,
@@ -20,7 +20,7 @@ export function connectRoom(roomId, name, onMessage) {
     function open() {
         ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/${roomId}`)
         ws.onopen = () => {
-            retries = 0
+            delay = 0
             socket.send({ type: 'hello', name })
             for (let i = 0; i < 5; i++) {
                 setTimeout(ping, i * 200)
@@ -40,7 +40,8 @@ export function connectRoom(roomId, name, onMessage) {
         }
         ws.onclose = () => {
             onMessage({ type: 'error', message: 'Connection lost – reconnecting…' })
-            setTimeout(open, Math.min(1000 * 2 ** retries++, 15_000))
+            delay = nextBackoff(delay, 1000, 15_000)
+            setTimeout(open, delay)
         }
     }
 
