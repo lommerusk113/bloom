@@ -1,4 +1,4 @@
-import { test } from 'node:test'
+import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -26,13 +26,16 @@ test('stripApiKeys removes keys from playlist urls', () => {
     assert.equal(stripApiKeys('0.mp4?a=1&api_key=S&b=2'), '0.mp4?a=1&b=2')
 })
 
-async function serve(room: Room, jf: Jellyfin, clock = () => Date.now()) {
+async function serve(t: TestContext, room: Room, jf: Jellyfin, clock = () => Date.now()) {
     const server = createServer((req, res) => {
         proxyRequest(req, res, room, req.url ?? '/', jf, clock()).catch(() => res.destroy())
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-    return { base, close: () => { server.closeAllConnections(); server.close() } }
+    t.after(() => {
+        server.closeAllConnections()
+        server.close()
+    })
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 }
 
 /** A Jellyfin that hands out PlaySessionId p<n> per PlaybackInfo and answers everything else with a playlist. */
@@ -57,19 +60,18 @@ function fakeJellyfin(calls: Array<[string, RequestInit]> = [], extra = {}) {
 
 const playbackInfo = (base: string) => fetch(`${base}/Items/${ITEM}/PlaybackInfo`, { method: 'POST', body: '{}' })
 
-test('proxy rejects items outside the queue', async () => {
+test('proxy rejects items outside the queue', async (t) => {
     const jf = { raw: async () => { throw new Error('must not be called') } } as unknown as Jellyfin
-    const { base, close } = await serve(createRoom('r', 0), jf)
+    const base = await serve(t, createRoom('r', 0), jf)
     const res = await fetch(`${base}/Videos/${ITEM}/master.m3u8`)
     assert.equal(res.status, 404)
-    close()
 })
 
-test('proxy forwards queued items, strips keys and adds CORS', async () => {
+test('proxy forwards queued items, strips keys and adds CORS', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     const calls: Array<[string, RequestInit]> = []
-    const { base, close } = await serve(room, fakeJellyfin(calls))
+    const base = await serve(t, room, fakeJellyfin(calls))
     await playbackInfo(base)
     const res = await fetch(`${base}/Videos/${ITEM}/master.m3u8?DeviceId=d1&PlaySessionId=p1`)
     assert.equal(res.status, 200)
@@ -77,10 +79,9 @@ test('proxy forwards queued items, strips keys and adds CORS', async () => {
     assert.equal(await res.text(), '#EXTM3U\nmain.m3u8?x=1\n')
     assert.equal(calls[1][0], `/Videos/${ITEM}/master.m3u8?PlaySessionId=p1&DeviceId=p1`)
     assert.equal(new Headers(calls[1][1].headers).get('accept-encoding'), 'identity')
-    close()
 })
 
-test('proxy strips api keys and paths from PlaybackInfo', async () => {
+test('proxy strips api keys and paths from PlaybackInfo', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     const jf = {
@@ -94,7 +95,7 @@ test('proxy strips api keys and paths from PlaybackInfo', async () => {
             }],
         }), { headers: { 'content-type': 'application/json' } }),
     } as unknown as Jellyfin
-    const { base, close } = await serve(room, jf)
+    const base = await serve(t, room, jf)
     const res = await fetch(`${base}/Items/${ITEM}/PlaybackInfo`, { method: 'POST', body: '{}' })
     const text = await res.text()
     assert.equal(res.status, 200)
@@ -103,10 +104,9 @@ test('proxy strips api keys and paths from PlaybackInfo', async () => {
     const source = JSON.parse(text).MediaSources[0]
     assert.equal(source.TranscodingUrl, '/videos/x/master.m3u8?DeviceId=d&PlaySessionId=p')
     assert.equal(source.MediaStreams[0].DeliveryUrl, '/Videos/x/m/Subtitles/2/0/Stream.vtt')
-    close()
 })
 
-test('proxy redacts the literal api key from every text body', async () => {
+test('proxy redacts the literal api key from every text body', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     const jf = {
@@ -115,55 +115,51 @@ test('proxy redacts the literal api key from every text body', async () => {
             ? Response.json({ PlaySessionId: 'p', ErrorCode: 'token KEY123', MediaSources: [] })
             : new Response('#EXTM3U\n#EXT-X-KEY:URI="k?token=KEY123"\n'),
     } as unknown as Jellyfin
-    const { base, close } = await serve(room, jf)
+    const base = await serve(t, room, jf)
     const info = await (await playbackInfo(base)).text()
     const playlist = await (await fetch(`${base}/Videos/${ITEM}/master.m3u8?PlaySessionId=p`)).text()
     for (const text of [info, playlist]) {
         assert.ok(text.length > 0)
         assert.ok(!text.includes('KEY123'), text)
     }
-    close()
 })
 
-test('proxy returns 502 for non-JSON PlaybackInfo on success', async () => {
+test('proxy returns 502 for non-JSON PlaybackInfo on success', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     const jf = { redact: (text: string) => text, raw: async () => new Response('not json') } as unknown as Jellyfin
-    const { base, close } = await serve(room, jf)
+    const base = await serve(t, room, jf)
     const res = await fetch(`${base}/Items/${ITEM}/PlaybackInfo`, { method: 'POST', body: '{}' })
     assert.equal(res.status, 502)
-    close()
 })
 
-test('proxy overwrites UserId when the server runs as a user', async () => {
+test('proxy overwrites UserId when the server runs as a user', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     const calls: Array<[string, RequestInit]> = []
-    const { base, close } = await serve(room, fakeJellyfin(calls, { userId: 'me' }))
+    const base = await serve(t, room, fakeJellyfin(calls, { userId: 'me' }))
     await fetch(`${base}/Items/${ITEM}/PlaybackInfo?userid=evil&a=1`, { method: 'POST', body: '{}' })
     assert.equal(calls[0][0], `/Items/${ITEM}/PlaybackInfo?a=1&UserId=me`)
-    close()
 })
 
-test('proxy only serves HLS for play sessions started in the room', async () => {
+test('proxy only serves HLS for play sessions started in the room', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     const calls: Array<[string, RequestInit]> = []
-    const { base, close } = await serve(room, fakeJellyfin(calls))
+    const base = await serve(t, room, fakeJellyfin(calls))
     assert.equal((await fetch(`${base}/Videos/${ITEM}/master.m3u8`)).status, 403)
     assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p1`)).status, 403)
     await playbackInfo(base)
     assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?playsessionid=p1`)).status, 200)
     assert.equal((await fetch(`${base}/Videos/${ITEM}/hls1/main/0.mp4?PlaySessionId=p1`)).status, 200)
     assert.equal((await fetch(`${base}/Videos/${ITEM}/hls1/main/0.mp4?PlaySessionId=p2`)).status, 403)
-    close()
 })
 
-test('proxy stops only the room\'s transcodes, once', async () => {
+test('proxy stops only the room\'s transcodes, once', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     const calls: Array<[string, RequestInit]> = []
-    const { base, close } = await serve(room, fakeJellyfin(calls))
+    const base = await serve(t, room, fakeJellyfin(calls))
     const stop = () => fetch(`${base}/Videos/ActiveEncodings?DeviceId=d&PlaySessionId=p1`, { method: 'DELETE' })
     assert.equal((await stop()).status, 403)
     await playbackInfo(base)
@@ -172,14 +168,13 @@ test('proxy stops only the room\'s transcodes, once', async () => {
     assert.equal(calls[1][1].method, 'DELETE')
     assert.equal((await stop()).status, 403)
     assert.equal((await fetch(`${base}/Videos/${ITEM}/master.m3u8?PlaySessionId=p1`)).status, 403)
-    close()
 })
 
-test('proxy pins DeviceId to the PlaySessionId whatever the guest sends', async () => {
+test('proxy pins DeviceId to the PlaySessionId whatever the guest sends', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     const calls: Array<[string, RequestInit]> = []
-    const { base, close } = await serve(room, fakeJellyfin(calls))
+    const base = await serve(t, room, fakeJellyfin(calls))
     await playbackInfo(base)
     await fetch(`${base}/Videos/${ITEM}/main.m3u8?deviceid=a&DEVICEID=b&PlaySessionId=p1`)
     await fetch(`${base}/Videos/${ITEM}/hls1/main/3.mp4?PlaySessionId=p1&DeviceId=c`)
@@ -189,14 +184,13 @@ test('proxy pins DeviceId to the PlaySessionId whatever the guest sends', async 
         assert.deepEqual([...params].filter(([name]) => name.toLowerCase() === 'deviceid'), [['DeviceId', 'p1']], path)
     }
     assert.equal(calls.length, 4)
-    close()
 })
 
-test('proxy caps play sessions per room', async () => {
+test('proxy caps play sessions per room', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     const calls: Array<[string, RequestInit]> = []
-    const { base, close } = await serve(room, fakeJellyfin(calls))
+    const base = await serve(t, room, fakeJellyfin(calls))
     for (let i = 0; i < 24; i++) {
         assert.equal((await playbackInfo(base)).status, 200)
     }
@@ -204,14 +198,13 @@ test('proxy caps play sessions per room', async () => {
     assert.equal(res.status, 429)
     assert.deepEqual(await res.json(), { error: 'Too many active streams in this room' })
     assert.equal(calls.length, 24)
-    close()
 })
 
-test('idle play sessions keep access but stop counting toward the cap', async () => {
+test('idle play sessions keep access but stop counting toward the cap', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     let now = 0
-    const { base, close } = await serve(room, fakeJellyfin(), () => now)
+    const base = await serve(t, room, fakeJellyfin(), () => now)
     for (let i = 0; i < 24; i++) {
         await playbackInfo(base)
     }
@@ -222,14 +215,13 @@ test('idle play sessions keep access but stop counting toward the cap', async ()
     now = 200_000
     assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p2`)).status, 200)
     assert.equal((await playbackInfo(base)).status, 200)
-    close()
 })
 
-test('proxy keeps at most 500 issued play sessions, dropping the least recently used', async () => {
+test('proxy keeps at most 500 issued play sessions, dropping the least recently used', async (t) => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     let now = 0
-    const { base, close } = await serve(room, fakeJellyfin(), () => now)
+    const base = await serve(t, room, fakeJellyfin(), () => now)
     await playbackInfo(base)
     await playbackInfo(base)
     now = 1
@@ -241,5 +233,4 @@ test('proxy keeps at most 500 issued play sessions, dropping the least recently 
     assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p2`)).status, 403)
     assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p1`)).status, 200)
     assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p3`)).status, 200)
-    close()
 })
