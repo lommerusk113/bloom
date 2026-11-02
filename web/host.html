@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bloom</title>
+<link rel="icon" href="/web/logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/web/style.css">
 </head>
 <body>
@@ -11,7 +12,7 @@
     <p id="jfError" class="banner error" hidden></p>
 
     <section id="login" class="card" hidden>
-        <h1>Bloom</h1>
+        <h1 class="brand-title"><img src="/web/logo.svg" alt=""> Bloom</h1>
         <p class="muted">Watch Jellyfin together. Log in to create a room and pick something.</p>
         <form id="loginForm" class="row">
             <input id="password" type="password" placeholder="Host password" required autofocus>
@@ -22,7 +23,7 @@
 
     <section id="lobby" hidden>
         <header class="top">
-            <h1>Bloom</h1>
+            <h1 class="brand-title"><img src="/web/logo.svg" alt=""> Bloom</h1>
             <button id="newRoom" class="primary">+ New room</button>
         </header>
         <p class="muted">A room is one shared screen: everyone in it watches the same thing at the same moment.</p>
@@ -32,7 +33,7 @@
 
     <section id="manage" class="app" hidden>
         <header class="appbar">
-            <a href="/" class="brand" title="All rooms">← Rooms</a>
+            <a href="/" class="brand" title="All rooms"><img src="/web/logo.svg" alt=""> Bloom</a>
             <nav id="libraries" class="tabs"></nav>
             <form id="searchForm" class="search">
                 <input id="q" type="search" placeholder="Search" required aria-label="Search the library">

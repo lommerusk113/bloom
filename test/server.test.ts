@@ -87,6 +87,7 @@ test('host-only endpoints require login', async () => {
 
 test('serves pages and static files, never source', async () => {
     assert.equal((await fetch(`${BASE}/web/style.css`)).status, 200)
+    assert.equal((await fetch(`${BASE}/web/logo.svg`)).headers.get('content-type'), 'image/svg+xml')
     // fetch normalizes '..' away, so send the raw paths
     for (const path of ['/web/../src/server.ts', '/web/..%2fsrc%2fserver.ts', '/web/..%2Fsrc%2Fserver.ts']) {
         const req = request({ host: '127.0.0.1', port: PORT, path })

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Bloom">
+  <defs>
+    <linearGradient id="bell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff5a5f"/>
+      <stop offset="1" stop-color="#c8102e"/>
+    </linearGradient>
+  </defs>
+  <!-- bell: a play button sits inside it -->
+  <path d="M8 30C8 16 18.7 6 32 6s24 10 24 24c0 2.2-1.8 4-4 4H12c-2.2 0-4-1.8-4-4z" fill="url(#bell)"/>
+  <path d="M27 14.5v13l10.5-6.5z" fill="#fff"/>
+  <!-- tentacles -->
+  <g fill="none" stroke="#ff5a5f" stroke-width="3.2" stroke-linecap="round">
+    <path d="M17 38c-2 5 2 8 0 13s1 7 1 7"/>
+    <path d="M27 38c-2 6 2 9 0 15"/>
+    <path d="M37 38c2 6-2 9 0 15"/>
+    <path d="M47 38c2 5-2 8 0 13s-1 7-1 7"/>
+  </g>
+</svg>

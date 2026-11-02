@@ -1,3 +1,5 @@
+<img src="web/logo.svg" alt="" width="72">
+
 # Bloom
 
 *A group of jellyfish is called a bloom.*

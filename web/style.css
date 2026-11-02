@@ -225,3 +225,7 @@ h2.shelf-title { margin: 0 auto 0 0; }
 .open-player { text-align: center; }
 .small { font-size: .85em; }
 .invite .check { margin-top: 2px; }
+.brand-title { display: flex; align-items: center; gap: 10px; }
+.brand-title img { width: 36px; height: 36px; }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--text) !important; font-size: 1.1em; }
+.brand img { width: 28px; height: 28px; }

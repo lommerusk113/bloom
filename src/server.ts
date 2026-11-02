@@ -28,6 +28,7 @@ const CONTENT_TYPES: Record<string, string> = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'text/javascript; charset=utf-8',
     '.css': 'text/css; charset=utf-8',
+    '.svg': 'image/svg+xml',
 }
 
 const PORT = Number(process.env.PORT ?? 8080)
@@ -170,7 +171,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         if (path === '/vendor/hls.min.js') {
             return sendFile(res, HLS_JS)
         }
-        const asset = /^\/web\/([\w-]+\.(?:js|css|html))$/.exec(path)
+        const asset = /^\/web\/([\w-]+\.(?:js|css|html|svg))$/.exec(path)
         if (asset) {
             return sendFile(res, join(WEB_DIR, asset[1]))
         }
