@@ -22,7 +22,7 @@ Watchparty never encodes video itself. Every guest gets an HLS stream from Jelly
    }
    ```
 
-   Nginx needs `proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`.
+   Nginx needs `proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`.
 
    The example compose file publishes port 8080 on `127.0.0.1` only, so it is reachable from a reverse proxy on the same host (`localhost:8080`) or on the same Docker network (`watchparty:8080`), never directly from outside.
    The container runs read-only with all capabilities dropped; Watchparty keeps everything in memory.
@@ -33,12 +33,12 @@ Watchparty never encodes video itself. Every guest gets an HLS stream from Jelly
 | `JELLYFIN_API_KEY` | yes | API key from step 1 |
 | `JELLYFIN_USER_ID` | no | Run as this Jellyfin user; set if PlaybackInfo or remote control fails with only an API key; also limits libraries to that user's |
 | `HOST_PASSWORD` | yes | Password for the host page |
-| `PUBLIC_URL` | no | External URL; `https://` enables the Secure cookie flag |
+| `PUBLIC_URL` | behind a reverse proxy | External URL; its host is accepted as the websocket Origin and `https://` enables the Secure cookie flag |
 | `PORT` | no | Default `8080` |
 
 ## Using it
 
-1. Open `PUBLIC_URL`, log in, create a room, search and add things to the queue.
+1. Open the external URL, log in, create a room, search and add things to the queue.
 2. Share the room link. Guests enter a name and watch.
 3. To watch on a TV or phone with the Jellyfin app: open the app on that device (logged in as anyone), then on the host page pick it under **Native Jellyfin devices** and click **Add**. Tick **My device** for your own devices so they can always control playback.
 4. **Guests can control playback** decides whether guests and untrusted native devices may pause, seek or skip. Devices ticked **My device** may always control playback.

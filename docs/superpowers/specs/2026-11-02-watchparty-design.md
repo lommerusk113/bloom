@@ -164,7 +164,7 @@ Expected native sync precision: ~3s (limited by client progress reporting). Web 
 * `JELLYFIN_API_KEY` — admin API key
 * `JELLYFIN_USER_ID` — optional; run as this Jellyfin user (needed when PlaybackInfo or remote control fails with only an API key; limits libraries to that user's)
 * `HOST_PASSWORD` — host login
-* `PUBLIC_URL` — external HTTPS base URL (for links and Cast)
+* `PUBLIC_URL` — external base URL; its host is accepted as the websocket Origin and `https://` enables the Secure cookie flag (links and Cast use the browser's `location.origin`)
 * `PORT` — default 8080
 
 ## Security
