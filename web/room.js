@@ -107,6 +107,7 @@ async function load(itemId) {
     try {
         const source = await playbackInfo(roomId, itemId, deviceProfile(video), { deviceId, audio: prefs.audio, subs, bitrate: prefs.bitrate })
         if (token !== loadToken) {
+            stopStream(roomId, source.TranscodingUrl, deviceId) // superseded: don't leak its transcode
             return
         }
         current = { itemId, source }
@@ -116,22 +117,25 @@ async function load(itemId) {
         showSubtitles()
         fillPickers()
         $('status').textContent = ''
-        retry = { itemId: null, delay: 0 }
     } catch (err) {
-        if (token !== loadToken) {
-            return
+        if (token === loadToken) {
+            retryLoad(token, itemId, err.message)
         }
-        if (retry.itemId !== itemId) {
-            retry = { itemId, delay: 0 }
-        }
-        const delay = retry.delay = nextBackoff(retry.delay, 5000, 60_000)
-        $('status').textContent = `${err.message} – retrying in ${delay / 1000}s…`
-        setTimeout(() => {
-            if (token === loadToken) {
-                load(itemId)
-            }
-        }, delay)
     }
+}
+
+/** Reloads itemId after a backoff unless another load starts first. */
+function retryLoad(token, itemId, message) {
+    if (retry.itemId !== itemId) {
+        retry = { itemId, delay: 0 }
+    }
+    const delay = retry.delay = nextBackoff(retry.delay, 5000, 60_000)
+    $('status').textContent = `${message} – retrying in ${delay / 1000}s…`
+    setTimeout(() => {
+        if (token === loadToken) {
+            load(itemId)
+        }
+    }, delay)
 }
 
 addEventListener('pagehide', () => {
@@ -145,16 +149,16 @@ function attach(src) {
     hls = null
     pendingSeek = false
     if (window.Hls?.isSupported()) {
+        const token = loadToken
         hls = new Hls({ startPosition: currentTarget() })
         hls.on(Hls.Events.ERROR, (_, data) => {
-            if (!data.fatal) {
+            if (!data.fatal || token !== loadToken) {
                 return
             }
             if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                 hls.recoverMediaError()
             } else {
-                $('status').textContent = 'Stream error – reloading…'
-                setTimeout(() => load(current.itemId), 3000)
+                retryLoad(++loadToken, current.itemId, 'Stream error') // new token: later errors of this hls are ignored
             }
         })
         hls.loadSource(src)
@@ -270,7 +274,10 @@ function render() {
 // --- sync ---
 
 video.addEventListener('waiting', () => { stalled = true })
-video.addEventListener('playing', () => { stalled = false })
+video.addEventListener('playing', () => {
+    stalled = false
+    retry = { itemId: null, delay: 0 } // the stream works: the next failure starts the backoff over
+})
 video.addEventListener('canplay', () => { stalled = false })
 video.addEventListener('seeked', () => { lastSeekedAt = Date.now() })
 
