@@ -145,14 +145,6 @@ function manage() {
         const term = $('q').value
         browse([{ label: `Results for “${term}”`, load: () => api(`/api/search?q=${encodeURIComponent(term)}`) }])
     }
-    $('addNative').onclick = () => {
-        const option = $('sessions').selectedOptions[0]
-        if (option) {
-            socket.send({ type: 'nativeAdd', sessionId: option.value, label: option.textContent, device: option.dataset.device, trusted: $('trusted').checked })
-        }
-    }
-    $('refreshSessions').onclick = loadSessions
-    loadSessions()
     setInterval(renderTime, 1000)
 }
 
@@ -202,22 +194,6 @@ async function browse(trail) {
     }
 }
 
-async function loadSessions() {
-    try {
-        const sessions = await api('/api/sessions')
-        $('sessions').replaceChildren(...sessions.map((s) => {
-            const option = new Option(s.label, s.id)
-            option.dataset.device = s.device
-            return option
-        }))
-        if (sessions.length === 0) {
-            $('sessions').replaceChildren(new Option('No Jellyfin apps open right now', ''))
-        }
-    } catch (err) {
-        showStatus(err.message)
-    }
-}
-
 function renderTime() {
     const item = state?.room.queue[state.room.index]
     if (!item) {
@@ -249,15 +225,6 @@ function render() {
         )
         row.classList.toggle('current', i === room.index)
         return row
-    }))
-
-    $('natives').replaceChildren(...room.nativeSessions.map((n) => {
-        const ok = n.status === 'syncing'
-        return li(`${n.label}${n.trusted ? ' · my device' : ''}`,
-            el('span', ok ? 'tag ok' : 'tag bad', ok ? 'In sync' : 'Out of sync'),
-            ...(ok ? [] : [button('Retry', () => socket.send({ type: 'nativeAdd', sessionId: n.sessionId, label: n.label, device: n.device, trusted: n.trusted }))]),
-            button('Remove', () => socket.send({ type: 'nativeRemove', sessionId: n.sessionId })),
-        )
     }))
 
     $('viewers').replaceChildren(...(viewers.length ? viewers.map(v => el('span', 'chip', v)) : [el('span', 'muted', 'Nobody has joined yet')]))
