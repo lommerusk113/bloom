@@ -86,6 +86,15 @@ test('after the queue empties, a session playing another item is left alone', as
     assert.deepEqual(calls, ['pause'])
 })
 
+test('removing the playing last item pauses a session still playing it', async () => {
+    const r = room({ queue: [{ id: OTHER, name: 'B', runtime: 3600 }, { id: ITEM, name: 'A', runtime: 3600 }], index: 1 })
+    const { conductor, calls } = setup(r, () => session(100, { checkIn: NOW }))
+    await conductor.tick(NOW)
+    apply(r, { type: 'queueRemove', index: 1 }, true, NOW + 1000)
+    await conductor.tick(NOW + 2000)
+    assert.deepEqual(calls, ['pause'])
+})
+
 test('drift over 3s seeks to the room position', () => {
     assert.deepEqual(decide(session(104), room(), track(), NOW), { kind: 'seek', position: 100 })
 })

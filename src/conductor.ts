@@ -38,7 +38,7 @@ export type Track = {
     confirmed: boolean
     /** Consecutive polls without the session, e.g. while the client reconnects. */
     misses: number
-    /** Id of the room's item at the last step that had one; after the queue empties, the item to stop. */
+    /** Id of the room's item at the last decided step that had one; during decide() the previous item, e.g. one just removed. */
     itemId: string | null
 }
 
@@ -113,7 +113,13 @@ export function decide(s: JfSession | undefined, room: Room, t: Track, now: numb
     if (normalizeId(s.NowPlayingItem?.Id ?? '') !== normalizeId(item.id)) {
         // the session finished the item the room is ending too; relaunching it would replay the last seconds
         if (item.runtime > 0 && currentPosition(room, now) >= item.runtime - SEEK_THRESHOLD) {
-            return { kind: 'none' }
+            // unless the session still plays the room's previous item, removed while playing: the room parked here paused
+            const playingRemoved = t.itemId !== null && normalizeId(t.itemId) !== normalizeId(item.id)
+                && normalizeId(s.NowPlayingItem?.Id ?? '') === normalizeId(t.itemId)
+            if (room.playing || !playingRemoved || believed(s, t, now).paused) {
+                return { kind: 'none' }
+            }
+            return cooling(COMMAND_COOLDOWN_MS) ? { kind: 'wait' } : { kind: 'pause' }
         }
         return cooling(t.lastKind === 'play' ? PLAY_COOLDOWN_MS : COMMAND_COOLDOWN_MS) ? { kind: 'wait' } : { kind: 'play' }
     }
@@ -185,7 +191,6 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
         const key = `${room.id}:${ns.sessionId}`
         const t = tracks.get(key) ?? newTrack()
         tracks.set(key, t)
-        t.itemId = room.queue[room.index]?.id ?? t.itemId
 
         t.misses = s ? 0 : t.misses + 1
         if (t.misses > 0 && t.misses < MAX_MISSES) {
@@ -198,6 +203,7 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
         }
 
         const action = decide(s, room, t, now)
+        t.itemId = room.queue[room.index]?.id ?? t.itemId
         if (isCommand(action) && t.lastKind !== action.kind) {
             t.attempts = 0
         }
