@@ -1,6 +1,6 @@
 # Put this next to your Jellyfin service, or point JELLYFIN_URL at the Jellyfin host.
 services:
-  watchparty:
+  bloom:
     build: .
     restart: unless-stopped
     environment:

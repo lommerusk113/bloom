@@ -432,6 +432,7 @@ function render() {
     $('toggle').querySelector('path').setAttribute('d', room.playing ? PAUSE_ICON : PLAY_ICON)
     $('seek').max = String(Math.floor(item?.runtime ?? 0))
     $('title').textContent = item?.name ?? 'Waiting for the host to pick something…'
+    document.title = item ? `${item.name} · Bloom` : 'Bloom'
     $('lock').hidden = canControl
     const chip = (text, title = '') => {
         const span = document.createElement('span')

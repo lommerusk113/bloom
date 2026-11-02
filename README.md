@@ -1,8 +1,10 @@
-# Watchparty
+# Bloom
+
+*A group of jellyfish is called a bloom.*
 
 Watch Jellyfin together. Guests join by link in a browser (or cast to a Chromecast). Everyone stays in sync.
 
-Watchparty never encodes video itself. Every guest gets an HLS stream from Jellyfin (a cheap remux when the browser supports the codecs, a transcode otherwise), so Jellyfin stays the only program using the GPU.
+Bloom never encodes video itself. Every guest gets an HLS stream from Jellyfin (a cheap remux when the browser supports the codecs, a transcode otherwise), so Jellyfin stays the only program using the GPU.
 
 ## Requirements
 
@@ -12,20 +14,20 @@ Watchparty never encodes video itself. Every guest gets an HLS stream from Jelly
 
 ## Setup
 
-1. In Jellyfin: **Dashboard → API Keys → +**, name it `watchparty`.
+1. In Jellyfin: **Dashboard → API Keys → +**, name it `bloom`.
 2. Copy `docker-compose.example.yml` to `docker-compose.yml`, fill in the values, run `docker compose up -d --build`.
 3. Put it behind your reverse proxy with websocket upgrade enabled. Caddy example:
 
    ```
    watch.example.com {
-       reverse_proxy watchparty:8080
+       reverse_proxy bloom:8080
    }
    ```
 
    Nginx needs `proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`.
 
-   The example compose file publishes port 8080 on `127.0.0.1` only, so it is reachable from a reverse proxy on the same host (`localhost:8080`) or on the same Docker network (`watchparty:8080`), never directly from outside.
-   The container runs read-only with all capabilities dropped; Watchparty keeps everything in memory.
+   The example compose file publishes port 8080 on `127.0.0.1` only, so it is reachable from a reverse proxy on the same host (`localhost:8080`) or on the same Docker network (`bloom:8080`), never directly from outside.
+   The container runs read-only with all capabilities dropped; Bloom keeps everything in memory.
 
 | Env var | Required | Meaning |
 |---|---|---|

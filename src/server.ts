@@ -551,4 +551,4 @@ process.on('unhandledRejection', err => console.error('Unhandled rejection:', er
 
 checkJellyfin()
 setInterval(checkJellyfin, 30_000)
-server.listen(PORT, () => console.log(`Watchparty listening on :${PORT} (${PUBLIC_URL})`))
+server.listen(PORT, () => console.log(`Bloom listening on :${PORT} (${PUBLIC_URL})`))

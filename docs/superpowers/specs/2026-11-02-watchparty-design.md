@@ -1,4 +1,4 @@
-# Watchparty — Design
+# Bloom (formerly Bloom) — Design
 
 Date: 2026-11-02
 
@@ -18,7 +18,7 @@ Replaces Jellyfin SyncPlay (poor client support) and Owncast/neko-rooms (double 
 
 ## Constraints
 
-* Server GPU: GTX 1060 6GB. Jellyfin must be the **only** process using the GPU. Watchparty never decodes or encodes video.
+* Server GPU: GTX 1060 6GB. Jellyfin must be the **only** process using the GPU. Bloom never decodes or encodes video.
 * Jellyfin already handles 4 concurrent viewers fine.
 * Guests are internet users without Jellyfin accounts; the Jellyfin API key must never reach the browser.
 
@@ -27,7 +27,7 @@ Replaces Jellyfin SyncPlay (poor client support) and Owncast/neko-rooms (double 
 One Node.js/TypeScript service in a Docker container next to Jellyfin.
 
 ```
- guests (browser / Chromecast) ──ws + http──▶ watchparty ──http (API key)──▶ Jellyfin
+ guests (browser / Chromecast) ──ws + http──▶ bloom ──http (API key)──▶ Jellyfin
 ```
 
 ### Units
@@ -63,7 +63,7 @@ The host can end a room (`DELETE /api/rooms/:id`, **End room** in the host UI): 
 
 ## Playback & transcoding
 
-Watchparty does **no** media processing.
+Bloom does **no** media processing.
 Each viewer gets an HLS stream from Jellyfin as its own play session (unique `DeviceId` + `PlaySessionId` per guest).
 Direct play is disabled so every stream goes through HLS and the proxy can bind it to the room:
 
