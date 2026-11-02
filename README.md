@@ -24,6 +24,9 @@ Watchparty never encodes video itself. Guests get whatever Jellyfin would serve 
 
    Nginx needs `proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`.
 
+   The example compose file publishes port 8080 on `127.0.0.1` only, so it is reachable from a reverse proxy on the same host (`localhost:8080`) or on the same Docker network (`watchparty:8080`), never directly from outside.
+   The container runs read-only with all capabilities dropped; Watchparty keeps everything in memory.
+
 | Env var | Required | Meaning |
 |---|---|---|
 | `JELLYFIN_URL` | yes | Internal Jellyfin URL, e.g. `http://jellyfin:8096` |

@@ -8,5 +8,10 @@ services:
       JELLYFIN_API_KEY: change-me
       HOST_PASSWORD: change-me
       PUBLIC_URL: https://watch.example.com
+    # localhost only: reach it through your reverse proxy
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+    # nothing is written to disk; all state lives in memory
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
