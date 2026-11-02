@@ -2,6 +2,7 @@
 
 export const RATE_THRESHOLD = 0.3
 export const SEEK_THRESHOLD = 2
+export const MAX_SEEK_LEAD = 5
 
 /** Room position in seconds at the given server time. */
 export function targetPosition(room, serverNow) {
@@ -27,4 +28,13 @@ export function median(values) {
     const sorted = [...values].sort((a, b) => a - b)
     const mid = sorted.length >> 1
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
+/**
+ * Seconds to seek ahead of the target so the player lands in sync after the
+ * seek's own delay (e.g. a transcode restart). driftAfterSeek is local - target
+ * measured once playback resumed: behind (negative) grows the lead.
+ */
+export function adaptLead(lead, driftAfterSeek) {
+    return Math.min(Math.max(lead - driftAfterSeek, 0), MAX_SEEK_LEAD)
 }

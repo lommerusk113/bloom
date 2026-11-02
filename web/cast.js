@@ -1,8 +1,9 @@
 // Chromecast via Google's Default Media Receiver. The sender SDK only exists in Chrome.
-import { decide } from './sync.js'
+import { adaptLead, decide } from './sync.js'
 import { deviceProfile, playbackInfo, proxied, subtitlePath, withDevice } from './playback.js'
 
 const COOLDOWN_MS = 3000
+const SEEK_COOLDOWN_MS = 8000 // a seek can restart the transcode; give it time to land
 
 export function setupCast({ roomId, deviceId, getState }) {
     const castDevice = `${deviceId}-cast`
@@ -10,6 +11,9 @@ export function setupCast({ roomId, deviceId, getState }) {
     let controller = null
     let loadedItem = null
     let lastAction = 0
+    let lastSeek = 0
+    let seekLead = 3
+    let pendingSeek = false
 
     function init() {
         const context = cast.framework.CastContext.getInstance()
@@ -78,6 +82,7 @@ export function setupCast({ roomId, deviceId, getState }) {
             if (loadedItem !== item.id) {
                 loadedItem = item.id
                 lastAction = Date.now()
+                pendingSeek = false
                 load(item, target, room.playing).catch((err) => {
                     console.error('Cast load failed', err)
                     loadedItem = null
@@ -88,14 +93,29 @@ export function setupCast({ roomId, deviceId, getState }) {
                 return
             }
             if (room.playing === player.isPaused) {
-                controller.playOrPause()
+                // explicit play/pause: playOrPause() toggles and can double-flip while RemotePlayer state lags
+                const media = cast.framework.CastContext.getInstance().getCurrentSession()?.getMediaSession()
+                if (room.playing) {
+                    media?.play(new chrome.cast.media.PlayRequest(), () => {}, console.error)
+                } else {
+                    media?.pause(new chrome.cast.media.PauseRequest(), () => {}, console.error)
+                }
                 lastAction = Date.now()
                 return
             }
-            if (decide(player.currentTime - target, room.playing, false).action === 'seek') {
-                player.currentTime = target
+            if (Date.now() - lastSeek < SEEK_COOLDOWN_MS) {
+                return
+            }
+            const drift = player.currentTime - target
+            if (pendingSeek && !player.isPaused) {
+                seekLead = adaptLead(seekLead, drift)
+                pendingSeek = false
+            }
+            if (decide(drift, room.playing, false).action === 'seek') {
+                player.currentTime = Math.min(target + (room.playing ? seekLead : 0), item.runtime || Infinity)
                 controller.seek()
-                lastAction = Date.now()
+                lastAction = lastSeek = Date.now()
+                pendingSeek = room.playing
             }
         },
     }

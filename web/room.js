@@ -1,5 +1,5 @@
 import { connectRoom } from './ws.js'
-import { decide, targetPosition } from './sync.js'
+import { adaptLead, decide, targetPosition } from './sync.js'
 import { deviceProfile, playbackInfo, proxied, subtitlePath, withDevice } from './playback.js'
 import { setupCast } from './cast.js'
 
@@ -16,6 +16,10 @@ let current = null    // { itemId, source } of the loaded stream; source null wh
 let loadToken = 0
 let hls = null
 let dragging = false
+let seekLead = 1        // seconds to seek past the target, learned from how far behind seeks land
+let pendingSeek = false // a seek while playing whose landing drift hasn't been measured yet
+let lastSeekedAt = 0
+let stalled = false     // buffering: currentTime frozen while not seeking
 
 function recall(key) {
     try {
@@ -123,6 +127,7 @@ async function load(itemId) {
 function attach(src) {
     hls?.destroy()
     hls = null
+    pendingSeek = false
     if (window.Hls?.isSupported()) {
         hls = new Hls({ startPosition: currentTarget() })
         hls.on(Hls.Events.ERROR, (_, data) => {
@@ -248,6 +253,11 @@ function render() {
 
 // --- sync ---
 
+video.addEventListener('waiting', () => { stalled = true })
+video.addEventListener('playing', () => { stalled = false })
+video.addEventListener('canplay', () => { stalled = false })
+video.addEventListener('seeked', () => { lastSeekedAt = Date.now() })
+
 function syncNow() {
     if (!state) {
         return
@@ -276,9 +286,21 @@ function syncNow() {
     if (!room.playing && !video.paused) {
         video.pause()
     }
-    const d = decide(video.currentTime - target, room.playing)
+    if (stalled) {
+        return // drift grows while buffering; seeking now would only restart the transcode
+    }
+    const drift = video.currentTime - target
+    if (pendingSeek && !video.seeking && !video.paused) {
+        seekLead = adaptLead(seekLead, drift)
+        pendingSeek = false
+    }
+    const d = decide(drift, room.playing)
     if (d.action === 'seek') {
-        video.currentTime = target
+        if (Date.now() - lastSeekedAt < 4000) {
+            return // let the last seek settle before judging it
+        }
+        video.currentTime = Math.min(target + (room.playing ? seekLead : 0), runtime || Infinity)
+        pendingSeek = room.playing
     }
     video.playbackRate = d.action === 'rate' ? d.rate : 1
 }
