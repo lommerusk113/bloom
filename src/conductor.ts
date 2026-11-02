@@ -152,7 +152,8 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
     const tracks = new Map<string, Track>()
     let running = false
 
-    async function tick(now = Date.now()): Promise<void> {
+    /** `now` pins the clock for tests; otherwise each session step reads it fresh, as sends are serial and may be slow. */
+    async function tick(now?: number): Promise<void> {
 
         const active = [...rooms.values()].filter(room => room.nativeSessions.some(n => n.status === 'syncing'))
         if (running || active.length === 0) {
@@ -164,7 +165,7 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
             const sessions = await jf.sessions()
             for (const room of active) {
                 for (const ns of room.nativeSessions.filter(n => n.status === 'syncing')) {
-                    await step(room, ns, sessions.find(s => s.Id === ns.sessionId), now)
+                    await step(room, ns, sessions.find(s => s.Id === ns.sessionId), now ?? Date.now())
                 }
             }
         } finally {

@@ -238,3 +238,23 @@ test('a session is lost only after 5 consecutive polls without it', async () => 
     await conductor.tick(NOW + 9000)
     assert.equal(r.nativeSessions[0].status, 'out-of-sync')
 })
+
+test('without a pinned clock each session step reads the time fresh', async (t) => {
+    const r = room()
+    r.nativeSessions.push(
+        { sessionId: 's1', label: 'TV', device: 'TV', trusted: false, status: 'syncing' },
+        { sessionId: 's2', label: 'TV', device: 'TV', trusted: false, status: 'syncing' },
+    )
+    let clock = NOW
+    t.mock.method(Date, 'now', () => clock)
+    const calls: string[] = []
+    const jf = {
+        sessions: async () => [session(0, { item: OTHER }), { ...session(0, { item: OTHER }), Id: 's2' }],
+        playNow: async (id: string, _item: string, position: number) => {
+            calls.push(`${id} ${position}`)
+            clock += 5000
+        },
+    } as unknown as Jellyfin
+    await createConductor(jf, new Map([[r.id, r]]), () => {}).tick()
+    assert.deepEqual(calls, ['s1 100', 's2 105'])
+})
