@@ -144,6 +144,7 @@ Expected native sync precision: ~3s (limited by client progress reporting). Web 
 * Host builds queue from library search (items, episodes, whole seasons).
 * When the room position reaches the item's runtime, the server advances `index`, sets position 0, playing true, broadcasts; conductor sends `PlayNow` to native sessions.
   Clients send no `ended` message; past the last item the room stops at its end.
+* Removing the playing last item parks the room at the end of the previous item, paused.
 * Guests may `next`/`jump` only if `guestControl` is on.
 
 ## Error handling
@@ -151,8 +152,8 @@ Expected native sync precision: ~3s (limited by client progress reporting). Web 
 | Situation | Behavior |
 |---|---|
 | Web client buffers | Room continues; client catches up via rate/seek |
-| Web client disconnects | Auto-reconnect with backoff; resyncs to room state |
-| Room idle (no web clients, no *syncing* native sessions) | Deleted after 30 min |
+| Web client disconnects | Auto-reconnect with backoff; resyncs to room state; a room that no longer exists closes the socket with 4404, the client stops reconnecting and shows "This room no longer exists" |
+| Room idle (no web clients, and an empty queue or no *syncing* native sessions) | Deleted after 30 min |
 | Native session ignores commands / goes offline | 3 ignored commands or 5 consecutive polls without the session → `out-of-sync`, flagged to host |
 | Jellyfin unreachable / bad API key | Startup check fails loudly in logs; host UI shows error; guests see "server unavailable" |
 | Proxy request for item not in queue | 404 |
