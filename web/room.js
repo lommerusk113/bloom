@@ -308,8 +308,14 @@ video.addEventListener('playing', () => {
 })
 video.addEventListener('canplay', () => { stalled = false })
 video.addEventListener('error', () => {
-    if (!hls && current?.source) {
-        retryLoad(++loadToken, current.itemId, 'Stream error') // native HLS: hls.js reports its own errors
+    if (!hls && current?.source) { // native HLS: hls.js reports its own errors
+        const code = video.error?.code
+        if ((code === MediaError.MEDIA_ERR_DECODE || code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) && safeItem !== current.itemId) {
+            safeItem = current.itemId
+            load(current.itemId)
+        } else {
+            retryLoad(++loadToken, current.itemId, 'Stream error')
+        }
     }
 })
 video.addEventListener('seeked', () => { lastSeekedAt = Date.now() })
