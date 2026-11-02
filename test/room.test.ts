@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { advanceIfEnded, apply, createRoom, currentPosition, parseCommand, type QueueItem, type Room } from '../src/room.ts'
+import { advanceIfEnded, apply, createRoom, currentPosition, parseCommand, sweepRooms, type QueueItem, type Room } from '../src/room.ts'
 
 const A: QueueItem = { id: 'a'.repeat(32), name: 'A', runtime: 100 }
 const B: QueueItem = { id: 'b'.repeat(32), name: 'B', runtime: 200 }
@@ -90,4 +90,40 @@ test('parseCommand accepts valid wire commands only', () => {
     assert.equal(parseCommand({ type: 'jump', index: 1.5 }), null)
     assert.equal(parseCommand({ type: 'queueAdd', items: [] }), null)
     assert.equal(parseCommand(null), null)
+})
+
+test('sweepRooms deletes rooms idle past the TTL unless a viewer or syncing native keeps them', () => {
+    const TTL = 30 * 60_000
+    const native = { sessionId: 's', label: 'TV', device: 'TV', trusted: false, status: 'out-of-sync' as const }
+    const rooms = new Map<string, Room>()
+    const lonely = roomWith()
+    lonely.id = 'lonely'
+    lonely.nativeSessions.push({ ...native })
+    const watched = roomWith()
+    watched.id = 'watched'
+    const synced = roomWith()
+    synced.id = 'synced'
+    synced.nativeSessions.push({ ...native, status: 'syncing' })
+    for (const room of [lonely, watched, synced]) {
+        rooms.set(room.id, room)
+    }
+    const emptySince = new Map<string, number>()
+    let viewers = 0
+    const viewerCount = (id: string) => (id === 'watched' ? viewers : 0)
+
+    sweepRooms(rooms, viewerCount, emptySince, 0)
+    viewers = 1
+    sweepRooms(rooms, viewerCount, emptySince, TTL)
+    viewers = 0
+    assert.deepEqual(sweepRooms(rooms, viewerCount, emptySince, TTL + 1).deleted, ['lonely'])
+    assert.deepEqual(sweepRooms(rooms, viewerCount, emptySince, 2 * TTL + 2).deleted, ['watched'])
+    assert.deepEqual([...rooms.keys()], ['synced'])
+})
+
+test('sweepRooms reports rooms whose item ended', () => {
+    const room = roomWith([A, B])
+    apply(room, { type: 'play' }, true, 0)
+    const { advanced } = sweepRooms(new Map([[room.id, room]]), () => 1, new Map(), 100_000)
+    assert.deepEqual(advanced, [room])
+    assert.equal(room.index, 1)
 })

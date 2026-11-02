@@ -31,6 +31,7 @@ export type Command =
     | { type: 'queueMove'; from: number; to: number }
     | { type: 'setGuestControl'; value: boolean }
 
+const ROOM_TTL_MS = 30 * 60_000
 const HOST_ONLY: ReadonlySet<Command['type']> = new Set(['queueAdd', 'queueRemove', 'queueMove', 'setGuestControl'])
 
 export function createRoom(id: string, now: number): Room {
@@ -82,6 +83,40 @@ export function advanceIfEnded(room: Room, now: number): boolean {
     }
 
     return jumpTo(room, room.index + 1, now)
+}
+
+/**
+ * Advances rooms whose item ended and deletes rooms idle (no viewers, no syncing native session) for over 30 minutes.
+ * emptySince holds when each room became idle and is updated in place.
+ */
+export function sweepRooms(
+    rooms: Map<string, Room>,
+    viewerCount: (id: string) => number,
+    emptySince: Map<string, number>,
+    now: number
+): { advanced: Room[]; deleted: string[] } {
+
+    const advanced: Room[] = []
+    const deleted: string[] = []
+    for (const room of rooms.values()) {
+        if (advanceIfEnded(room, now)) {
+            advanced.push(room)
+        }
+        const idle = viewerCount(room.id) === 0 && !room.nativeSessions.some(n => n.status === 'syncing')
+        if (!idle) {
+            emptySince.delete(room.id)
+            continue
+        }
+        const since = emptySince.get(room.id) ?? now
+        emptySince.set(room.id, since)
+        if (now - since > ROOM_TTL_MS) {
+            rooms.delete(room.id)
+            emptySince.delete(room.id)
+            deleted.push(room.id)
+        }
+    }
+
+    return { advanced, deleted }
 }
 
 /** Validates an untrusted websocket command. queueAdd is never accepted from the wire. */

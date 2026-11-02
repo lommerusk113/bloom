@@ -7,14 +7,13 @@ import { createAuth } from './auth.ts'
 import { createConductor } from './conductor.ts'
 import { createJellyfin } from './jellyfin.ts'
 import { proxyRequest, readBody } from './proxy.ts'
-import { advanceIfEnded, apply, createRoom, parseCommand, type Room } from './room.ts'
+import { apply, createRoom, parseCommand, sweepRooms, type Room } from './room.ts'
 
 /** windowStart/count/strikes: websocket rate limit state, see overLimit. */
 type Client = { ws: WebSocket; name: string; isHost: boolean; windowStart: number; count: number; strikes: number }
 
 const alive = new WeakSet<WebSocket>()
 
-const ROOM_TTL_MS = 30 * 60_000
 const MAX_MESSAGES_PER_SECOND = 20
 const MAX_STRIKES = 5
 const WEB_DIR = join(import.meta.dirname, '..', 'web')
@@ -318,24 +317,11 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
 // --- background loops ---
 
 setInterval(() => {
-    const now = Date.now()
-    for (const room of rooms.values()) {
-        if (advanceIfEnded(room, now)) {
-            broadcast(room)
-        }
-        const idle = (clients.get(room.id)?.size ?? 0) === 0 && !room.nativeSessions.some(n => n.status === 'syncing')
-        if (!idle) {
-            emptySince.delete(room.id)
-            continue
-        }
-        const since = emptySince.get(room.id) ?? now
-        emptySince.set(room.id, since)
-        if (now - since > ROOM_TTL_MS) {
-            rooms.delete(room.id)
-            clients.delete(room.id)
-            emptySince.delete(room.id)
-            conductor.forgetRoom(room.id)
-        }
+    const { advanced, deleted } = sweepRooms(rooms, id => clients.get(id)?.size ?? 0, emptySince, Date.now())
+    advanced.forEach(broadcast)
+    for (const id of deleted) {
+        clients.delete(id)
+        conductor.forgetRoom(id)
     }
 }, 1000)
 
