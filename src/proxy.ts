@@ -15,11 +15,13 @@ const ALLOWED: ReadonlyArray<[string, RegExp]> = [
 const PASSED_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control']
 const MAX_BODY = 1_000_000
 const MAX_SESSIONS = 24
+/** Play sessions without HLS requests this long are dropped (crashed tabs, stopped casts); Jellyfin kills such idle transcodes too. */
+const SESSION_IDLE_MS = 120_000
 const HLS = /\.m3u8$|\/hls1\//i
 const STOP = /^\/Videos\/ActiveEncodings$/i
 
-/** PlaySessionIds of the transcodes started through each room; HLS and stop requests must name one. */
-const sessions = new WeakMap<Room, Set<string>>()
+/** PlaySessionIds of the transcodes started through each room, with when each was last used; HLS and stop requests must name one. */
+const sessions = new WeakMap<Room, Map<string, number>>()
 
 function playSessionId(params: URLSearchParams): string | undefined {
     for (const [name, value] of params) {
@@ -47,12 +49,12 @@ export function stripApiKeys(playlist: string): string {
 
 /**
  * Removes the api key query params from each MediaSource.TranscodingUrl and drops the filesystem Path.
- * Adds the PlaySessionIds it finds to playSessions.
+ * Records the PlaySessionIds it finds in playSessions as seen at now.
  */
-export function sanitizePlaybackInfo(body: string, playSessions = new Set<string>()): string {
+export function sanitizePlaybackInfo(body: string, playSessions = new Map<string, number>(), now = Date.now()): string {
     const info = JSON.parse(body)
     if (typeof info?.PlaySessionId === 'string') {
-        playSessions.add(info.PlaySessionId)
+        playSessions.set(info.PlaySessionId, now)
     }
     for (const source of info?.MediaSources ?? []) {
         delete source.Path
@@ -66,7 +68,7 @@ export function sanitizePlaybackInfo(body: string, playSessions = new Set<string
             source.TranscodingUrl = url.pathname + url.search
             const id = playSessionId(url.searchParams)
             if (id) {
-                playSessions.add(id)
+                playSessions.set(id, now)
             }
         }
     }
@@ -90,12 +92,17 @@ export async function readBody(req: IncomingMessage): Promise<string> {
  */
 // ponytail: query strings pass through untouched, so a guest who already knows another item's
 // MediaSourceId could request it. Ids are unguessable GUIDs and are never listed to guests.
-export async function proxyRequest(req: IncomingMessage, res: ServerResponse, room: Room, target: string, jf: Jellyfin): Promise<void> {
+export async function proxyRequest(req: IncomingMessage, res: ServerResponse, room: Room, target: string, jf: Jellyfin, now = Date.now()): Promise<void> {
 
     const url = new URL(target, 'http://proxy')
     const method = req.method ?? 'GET'
-    const playSessions = sessions.get(room) ?? new Set<string>()
+    const playSessions = sessions.get(room) ?? new Map<string, number>()
     sessions.set(room, playSessions)
+    for (const [sessionId, lastSeen] of playSessions) {
+        if (now - lastSeen > SESSION_IDLE_MS) {
+            playSessions.delete(sessionId)
+        }
+    }
     const id = playSessionId(url.searchParams)
     const stop = method === 'DELETE' && STOP.test(url.pathname)
     if (!stop) {
@@ -108,6 +115,9 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
     if ((stop || HLS.test(url.pathname)) && !(id && playSessions.has(id))) {
         res.writeHead(403).end()
         return
+    }
+    if (HLS.test(url.pathname)) {
+        playSessions.set(id!, now)
     }
     if (/\/PlaybackInfo$/i.test(url.pathname) && playSessions.size >= MAX_SESSIONS) {
         res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Too many active streams in this room' }))
@@ -160,7 +170,7 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
         const text = await upstream.text()
         delete out['content-length']
         try {
-            const clean = sanitizePlaybackInfo(text, playSessions)
+            const clean = sanitizePlaybackInfo(text, playSessions, now)
             res.writeHead(upstream.status, out).end(clean)
         } catch {
             const ok = upstream.status >= 200 && upstream.status < 300

@@ -25,9 +25,9 @@ test('stripApiKeys removes keys from playlist urls', () => {
     assert.equal(stripApiKeys('0.mp4?a=1&api_key=S&b=2'), '0.mp4?a=1&b=2')
 })
 
-async function serve(room: Room, jf: Jellyfin) {
+async function serve(room: Room, jf: Jellyfin, clock = () => Date.now()) {
     const server = createServer((req, res) => {
-        proxyRequest(req, res, room, req.url ?? '/', jf).catch(() => res.destroy())
+        proxyRequest(req, res, room, req.url ?? '/', jf, clock()).catch(() => res.destroy())
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -158,5 +158,22 @@ test('proxy caps play sessions per room', async () => {
     assert.equal(res.status, 429)
     assert.deepEqual(await res.json(), { error: 'Too many active streams in this room' })
     assert.equal(calls.length, 24)
+    close()
+})
+
+test('proxy forgets play sessions unused for two minutes', async () => {
+    const room = createRoom('r', 0)
+    room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
+    let now = 0
+    const { base, close } = await serve(room, fakeJellyfin(), () => now)
+    for (let i = 0; i < 24; i++) {
+        await playbackInfo(base)
+    }
+    now = 100_000
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p1`)).status, 200)
+    now = 200_000
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p1`)).status, 200)
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p2`)).status, 403)
+    assert.equal((await playbackInfo(base)).status, 200)
     close()
 })
