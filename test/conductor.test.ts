@@ -110,7 +110,7 @@ test('our latest command beats an older report', () => {
 })
 
 function setup(r: Room, getSession: () => JfSession | undefined) {
-    r.nativeSessions.push({ sessionId: 's1', label: 'TV', trusted: false, status: 'syncing' })
+    r.nativeSessions.push({ sessionId: 's1', label: 'TV', device: 'TV', trusted: false, status: 'syncing' })
     const calls: string[] = []
     const jf = {
         sessions: async () => {

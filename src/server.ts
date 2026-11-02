@@ -43,16 +43,18 @@ function required(name: string): string {
 
 // --- room state fan-out ---
 
-function stateMessage(room: Room): string {
+/** Guests see native players only by device and status, never Jellyfin session ids or usernames. */
+function stateMessage(room: Room, isHost: boolean): string {
     const viewers = [...(clients.get(room.id) ?? [])].map(c => c.name)
-    return JSON.stringify({ type: 'state', room, viewers, serverNow: Date.now() })
+    const visible = isHost ? room : { ...room, nativeSessions: room.nativeSessions.map(n => ({ label: n.device, status: n.status })) }
+    return JSON.stringify({ type: 'state', room: visible, viewers, serverNow: Date.now() })
 }
 
 function broadcast(room: Room): void {
-    const msg = stateMessage(room)
+    const messages = { host: stateMessage(room, true), guest: stateMessage(room, false) }
     for (const client of clients.get(room.id) ?? []) {
         if (client.ws.readyState === WebSocket.OPEN) {
-            client.ws.send(msg)
+            client.ws.send(client.isHost ? messages.host : messages.guest)
         }
     }
 }
@@ -146,7 +148,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
     if (method === 'GET' && path === '/api/sessions') {
         const sessions = (await jf.sessions()).filter(s => s.SupportsRemoteControl)
-        return sendJson(res, 200, sessions.map(s => ({ id: s.Id, label: `${s.UserName ?? 'Unknown'} – ${s.DeviceName} (${s.Client})` })))
+        return sendJson(res, 200, sessions.map(s => ({ id: s.Id, label: `${s.UserName ?? 'Unknown'} – ${s.DeviceName} (${s.Client})`, device: `${s.DeviceName} (${s.Client})` })))
     }
 
     return sendJson(res, 404, { error: 'Not found' })
@@ -227,7 +229,7 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
         case 'cmd': {
             const cmd = parseCommand(msg.cmd)
             if (!cmd || !apply(room, cmd, client.isHost, now)) {
-                client.ws.send(stateMessage(room)) // rejected: resync the sender
+                client.ws.send(stateMessage(room, client.isHost)) // rejected: resync the sender
                 return
             }
             break
@@ -244,12 +246,14 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
             }
             const sessionId = String(msg.sessionId)
             const trusted = msg.trusted === true
+            const device = String(msg.device ?? 'Device').slice(0, 80)
             const existing = room.nativeSessions.find(n => n.sessionId === sessionId)
             if (existing) {
                 existing.status = 'syncing'
                 existing.trusted = trusted
+                existing.device = device
             } else {
-                room.nativeSessions.push({ sessionId, label: String(msg.label ?? sessionId).slice(0, 80), trusted, status: 'syncing' })
+                room.nativeSessions.push({ sessionId, label: String(msg.label ?? sessionId).slice(0, 80), device, trusted, status: 'syncing' })
             }
             conductor.reset(room.id, sessionId)
             break

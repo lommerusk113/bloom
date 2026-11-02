@@ -3,6 +3,8 @@ export type QueueItem = { id: string; name: string; runtime: number }
 export type NativeSession = {
     sessionId: string
     label: string
+    /** Device name and client, the only part guests see. */
+    device: string
     trusted: boolean
     status: 'syncing' | 'out-of-sync'
 }

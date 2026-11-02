@@ -103,7 +103,7 @@ function manage() {
     $('addNative').onclick = () => {
         const option = $('sessions').selectedOptions[0]
         if (option) {
-            socket.send({ type: 'nativeAdd', sessionId: option.value, label: option.textContent, trusted: $('trusted').checked })
+            socket.send({ type: 'nativeAdd', sessionId: option.value, label: option.textContent, device: option.dataset.device, trusted: $('trusted').checked })
         }
     }
     $('refreshSessions').onclick = loadSessions
@@ -113,7 +113,11 @@ function manage() {
 async function loadSessions() {
     try {
         const sessions = await api('/api/sessions')
-        $('sessions').replaceChildren(...sessions.map(s => new Option(s.label, s.id)))
+        $('sessions').replaceChildren(...sessions.map((s) => {
+            const option = new Option(s.label, s.id)
+            option.dataset.device = s.device
+            return option
+        }))
     } catch (err) {
         $('status').textContent = err.message
     }
@@ -132,7 +136,7 @@ function render({ room, viewers }) {
     $('natives').replaceChildren(...room.nativeSessions.map(n => li(
         `${n.label} — ${n.status}${n.trusted ? ' · my device' : ''}`,
         ...(n.status === 'out-of-sync'
-            ? [button('Retry', () => socket.send({ type: 'nativeAdd', sessionId: n.sessionId, label: n.label, trusted: n.trusted }))]
+            ? [button('Retry', () => socket.send({ type: 'nativeAdd', sessionId: n.sessionId, label: n.label, device: n.device, trusted: n.trusted }))]
             : []),
         button('Remove', () => socket.send({ type: 'nativeRemove', sessionId: n.sessionId })),
     )))

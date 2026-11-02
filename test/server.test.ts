@@ -94,6 +94,13 @@ test('room sockets share state and know who is host', async () => {
     host.send({ type: 'cmd', cmd: { type: 'setGuestControl', value: false } })
     const state = await guest.next(m => m.type === 'state' && m.room.guestControl === false && m.viewers.includes('Alice'))
     assert.deepEqual([...state.viewers].sort(), ['Alice', 'Host'])
+
+    host.send({ type: 'nativeAdd', sessionId: 'secret-session', label: 'bob – TV (Android TV)', device: 'TV (Android TV)', trusted: true })
+    const hostView = await host.next(m => m.type === 'state' && m.room.nativeSessions.length > 0)
+    assert.equal(hostView.room.nativeSessions[0].sessionId, 'secret-session')
+    const guestView = await guest.next(m => m.type === 'state' && m.room.nativeSessions.length > 0)
+    assert.deepEqual(Object.keys(guestView.room.nativeSessions[0]).sort(), ['label', 'status'])
+    assert.equal(guestView.room.nativeSessions[0].label, 'TV (Android TV)')
     host.close()
     guest.close()
 })
