@@ -2,6 +2,7 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
+import { request, type IncomingMessage } from 'node:http'
 import { connect } from 'node:net'
 import WebSocket from 'ws'
 
@@ -73,7 +74,18 @@ test('host-only endpoints require login', async () => {
 
 test('serves pages and static files, never source', async () => {
     assert.equal((await fetch(`${BASE}/web/style.css`)).status, 200)
-    assert.notEqual((await fetch(`${BASE}/web/../src/server.ts`)).status, 200)
+    // fetch normalizes '..' away, so send the raw paths
+    for (const path of ['/web/../src/server.ts', '/web/..%2fsrc%2fserver.ts', '/web/..%2Fsrc%2Fserver.ts']) {
+        const req = request({ host: '127.0.0.1', port: PORT, path })
+        req.end()
+        const [res] = (await once(req, 'response')) as [IncomingMessage]
+        let body = ''
+        for await (const chunk of res) {
+            body += chunk
+        }
+        assert.notEqual(res.statusCode, 200, path)
+        assert.ok(!body.includes('createServer'), path)
+    }
 })
 
 test('room sockets share state and know who is host', async () => {
