@@ -172,7 +172,9 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 })
 server.on('upgrade', (req, socket, head) => {
     const match = /^\/ws\/([\w-]+)$/.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
     const room = match ? rooms.get(match[1]) : undefined
-    if (!room) {
+    // cross-site websocket hijacking: browsers always send Origin, so a foreign one means another site's page
+    const origin = req.headers.origin
+    if (!room || (origin !== undefined && URL.parse(origin)?.host !== req.headers.host)) {
         socket.destroy()
         return
     }

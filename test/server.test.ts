@@ -43,8 +43,8 @@ async function login(): Promise<string> {
     return res.headers.get('set-cookie')!.split(';')[0]
 }
 
-function openSocket(roomId: string, cookie?: string) {
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${roomId}`, { headers: cookie ? { cookie } : {} })
+function openSocket(roomId: string, cookie?: string, origin?: string) {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${roomId}`, { headers: cookie ? { cookie } : {}, origin })
     const messages: Array<Record<string, any>> = []
     ws.on('message', data => messages.push(JSON.parse(String(data))))
     return {
@@ -79,7 +79,10 @@ test('room sockets share state and know who is host', async () => {
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
     assert.equal((await fetch(`${BASE}/r/${id}/jf/Videos/${'a'.repeat(32)}/master.m3u8`)).status, 404)
 
-    const host = openSocket(id, cookie)
+    const evil = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`, { origin: 'https://evil.example' })
+    await assert.rejects(once(evil, 'open'))
+
+    const host = openSocket(id, cookie, BASE)
     const guest = openSocket(id)
     await Promise.all([host.ready, guest.ready])
     host.send({ type: 'hello', name: 'Host' })
