@@ -71,6 +71,19 @@ function onMessage(msg) {
     }
     state = msg
     const item = state.room.queue[state.room.index]
+    if (!item && current) {
+        // queue emptied: drop the removed item's stream before the proxy starts refusing it
+        loadToken++ // cancels pending retries and in-flight loads
+        hls?.destroy()
+        hls = null
+        if (current.source) {
+            stopStream(roomId, current.source.TranscodingUrl)
+        }
+        video.removeAttribute('src')
+        video.load()
+        current = null
+        $('status').textContent = ''
+    }
     if (item && current?.itemId !== item.id) {
         prefs.audio = null
         prefs.subs = null
