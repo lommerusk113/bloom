@@ -302,3 +302,12 @@ test('a seek that lands behind adds the learned lead to the next drift seek', as
     await conductor.tick(NOW + 12_000)
     assert.deepEqual(calls, ['seek 100', 'seek 114'])
 })
+
+test('a room change while PlayNow loads does not re-send it', async () => {
+    const r = room()
+    const { conductor, calls } = setup(r, () => session(0, { item: OTHER, checkIn: NOW }))
+    await conductor.tick(NOW)
+    apply(r, { type: 'pause' }, true, NOW + 1000)
+    await conductor.tick(NOW + 2000)
+    assert.deepEqual(calls, [`play ${ITEM} 100`])
+})

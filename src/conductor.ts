@@ -40,10 +40,12 @@ export type Track = {
     misses: number
     /** Id of the room's item at the last decided step that had one; during decide() the previous item, e.g. one just removed. */
     itemId: string | null
+    /** Id of the item our last PlayNow started. */
+    playItem: string | null
 }
 
 export const newTrack = (): Track => ({
-    attempts: 0, lastCmdAt: 0, lastSeekAt: 0, lastKind: null, expect: null, lead: 0, pendingSeek: false, confirmed: true, misses: 0, itemId: null,
+    attempts: 0, lastCmdAt: 0, lastSeekAt: 0, lastKind: null, expect: null, lead: 0, pendingSeek: false, confirmed: true, misses: 0, itemId: null, playItem: null,
 })
 
 /** New seek lead after a seek landed `driftAfterSeek` seconds off the room (negative = behind). */
@@ -120,6 +122,12 @@ export function decide(s: JfSession | undefined, room: Room, t: Track, now: numb
                 return { kind: 'none' }
             }
             return cooling(COMMAND_COOLDOWN_MS) ? { kind: 'wait' } : { kind: 'pause' }
+        }
+        // a loading PlayNow of this item is not restarted by room changes, only by an item change
+        const loading = t.lastKind === 'play' && t.playItem !== null && normalizeId(t.playItem) === normalizeId(item.id)
+            && now - t.lastCmdAt < PLAY_COOLDOWN_MS
+        if (loading) {
+            return { kind: 'wait' }
         }
         return cooling(t.lastKind === 'play' ? PLAY_COOLDOWN_MS : COMMAND_COOLDOWN_MS) ? { kind: 'wait' } : { kind: 'play' }
     }
@@ -219,6 +227,9 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
 
         if (isCommand(action) && s) {
             const position = believed(s, t, now).position
+            if (action.kind === 'play') {
+                t.playItem = room.queue[room.index].id // before the send, which may outlast a room change
+            }
             await send(ns.sessionId, action, room, now)
             t.attempts++
             t.lastCmdAt = now
