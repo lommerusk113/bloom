@@ -4,7 +4,7 @@ import { deviceProfile, playbackInfo, proxied, subtitlePath, withDevice } from '
 
 const COOLDOWN_MS = 3000
 const SEEK_COOLDOWN_MS = 8000 // a seek can restart the transcode; give it time to land
-const MAX_RETRY_MS = 30_000 // Cast retries start at COOLDOWN_MS (one timer gates every Cast action), so they cap lower than the web 5s-60s
+const MAX_RETRY_MS = 30_000 // Cast backoff starts at COOLDOWN_MS (one timer gates every Cast action); the web player uses 5s-60s
 
 export function setupCast({ roomId, deviceId, getState }) {
     const castDevice = `${deviceId}-cast`

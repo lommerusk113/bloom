@@ -220,3 +220,21 @@ test('none without a report newer than our command does not confirm', async () =
     assert.deepEqual(calls, ['seek 100', 'seek 112'])
     assert.equal(r.position, 100)
 })
+
+test('a session is lost only after 5 consecutive polls without it', async () => {
+    const r = room()
+    let present = false
+    const { conductor } = setup(r, () => present ? session(100, { checkIn: NOW }) : undefined)
+    for (let i = 0; i < 4; i++) {
+        await conductor.tick(NOW + i * 1000)
+    }
+    present = true
+    await conductor.tick(NOW + 4000)
+    present = false
+    for (let i = 5; i < 9; i++) {
+        await conductor.tick(NOW + i * 1000)
+    }
+    assert.equal(r.nativeSessions[0].status, 'syncing')
+    await conductor.tick(NOW + 9000)
+    assert.equal(r.nativeSessions[0].status, 'out-of-sync')
+})

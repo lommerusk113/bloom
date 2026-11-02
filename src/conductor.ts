@@ -9,6 +9,7 @@ const SEEK_THRESHOLD = 3
 const USER_JUMP = 5
 const MAX_ATTEMPTS = 3
 const MAX_LEAD = 5
+const MAX_MISSES = 5
 
 type Expectation = { position: number; paused: boolean; at: number }
 
@@ -35,10 +36,12 @@ export type Track = {
     pendingSeek: boolean
     /** False from our last command until the session is seen in sync. */
     confirmed: boolean
+    /** Consecutive polls without the session, e.g. while the client reconnects. */
+    misses: number
 }
 
 export const newTrack = (): Track => ({
-    attempts: 0, lastCmdAt: 0, lastSeekAt: 0, lastKind: null, expect: null, lead: 0, pendingSeek: false, confirmed: true,
+    attempts: 0, lastCmdAt: 0, lastSeekAt: 0, lastKind: null, expect: null, lead: 0, pendingSeek: false, confirmed: true, misses: 0,
 })
 
 /** New seek lead after a seek landed `driftAfterSeek` seconds off the room (negative = behind). */
@@ -174,6 +177,11 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
         const key = `${room.id}:${ns.sessionId}`
         const t = tracks.get(key) ?? newTrack()
         tracks.set(key, t)
+
+        t.misses = s ? 0 : t.misses + 1
+        if (t.misses > 0 && t.misses < MAX_MISSES) {
+            return
+        }
 
         if (t.pendingSeek && s && checkInTime(s) > t.lastSeekAt) {
             t.lead = adaptLead(t.lead, believed(s, t, now).position - currentPosition(room, now))
