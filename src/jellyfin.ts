@@ -29,7 +29,7 @@ export type Jellyfin = ReturnType<typeof createJellyfin>
 export const normalizeId = (id: string): string => id.replaceAll('-', '').toLowerCase()
 
 /** Requires Jellyfin 10.9+ (user-less /Items with an API key) unless userId is given. */
-export function createJellyfin(baseUrl: string, apiKey: string, userId = process.env.JELLYFIN_USER_ID || undefined) {
+export function createJellyfin(baseUrl: string, apiKey: string, userId?: string) {
 
     const auth = `MediaBrowser Token="${apiKey}"`
 

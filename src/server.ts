@@ -28,7 +28,7 @@ const CONTENT_TYPES: Record<string, string> = {
 const PORT = Number(process.env.PORT ?? 8080)
 const PUBLIC_URL = process.env.PUBLIC_URL ?? `http://localhost:${PORT}`
 const PUBLIC_HOST = new URL(PUBLIC_URL).host
-const jf = createJellyfin(required('JELLYFIN_URL').replace(/\/$/, ''), required('JELLYFIN_API_KEY'))
+const jf = createJellyfin(required('JELLYFIN_URL').replace(/\/$/, ''), required('JELLYFIN_API_KEY'), process.env.JELLYFIN_USER_ID || undefined)
 const auth = createAuth(required('HOST_PASSWORD'), PUBLIC_URL.startsWith('https:'))
 
 const rooms = new Map<string, Room>()

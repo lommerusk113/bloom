@@ -16,6 +16,6 @@ test('search and queueItems pass userId when set', async (t) => {
     for (const url of urls) {
         assert.equal(new URL(url).searchParams.get('userId'), 'u1')
     }
-    await createJellyfin('http://jf', 'key', '').search('a')
+    await createJellyfin('http://jf', 'key').search('a')
     assert.equal(new URL(urls[2]).searchParams.get('userId'), null)
 })
