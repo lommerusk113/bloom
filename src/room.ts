@@ -195,7 +195,8 @@ function removeAt(room: Room, index: number, now: number): boolean {
     } else if (index === room.index) {
         room.index = Math.min(room.index, Math.max(room.queue.length - 1, 0))
         room.position = 0
-        room.playing = room.playing && room.queue.length > 0
+        // removing the last item ends the queue rather than replaying the previous one
+        room.playing = room.playing && index < room.queue.length
         room.updatedAt = now
     }
 

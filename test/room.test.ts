@@ -68,6 +68,15 @@ test('removing items keeps the current item stable', () => {
     assert.equal(room.position, 0)
 })
 
+test('removing the playing last item stops instead of replaying the previous one', () => {
+    const room = roomWith()
+    apply(room, { type: 'jump', index: 2 }, true, 0)
+    assert.equal(room.playing, true)
+    apply(room, { type: 'queueRemove', index: 2 }, true, 0)
+    assert.equal(room.playing, false)
+    assert.equal(room.position, 0)
+})
+
 test('moving items follows the current item', () => {
     const room = roomWith()
     apply(room, { type: 'queueMove', from: 0, to: 2 }, true, 0)
