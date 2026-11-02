@@ -20,6 +20,24 @@ test('search and queueItems pass userId when set', async (t) => {
     assert.equal(new URL(urls[2]).searchParams.get('userId'), null)
 })
 
+test('resolveUser picks the first administrator and passes it on', async (t) => {
+    const urls: string[] = []
+    t.mock.method(globalThis, 'fetch', async (url: string) => {
+        urls.push(url)
+        if (url.endsWith('/Users')) {
+            return Response.json([{ Id: 'u0', Name: 'kid', Policy: { IsAdministrator: false } }, { Id: 'admin', Name: 'me', Policy: { IsAdministrator: true } }])
+        }
+        return Response.json({ Items: [] })
+    })
+    const jf = createJellyfin('http://jf', 'key')
+    await jf.resolveUser()
+    assert.equal(jf.userId, 'admin')
+    await jf.children('s1')
+    const query = new URL(urls[1]).searchParams
+    assert.equal(query.get('userId'), 'admin')
+    assert.equal(query.get('ParentId'), 's1')
+})
+
 test('redact removes the api key from text', () => {
     assert.equal(createJellyfin('http://jf', 'k3y').redact('a?api_key=k3y&b=k3y'), 'a?api_key=&b=')
 })

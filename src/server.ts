@@ -188,6 +188,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (method === 'GET' && path === '/api/search') {
         return sendJson(res, 200, await jf.search(url.searchParams.get('q') ?? ''))
     }
+    if (method === 'GET' && path === '/api/children') {
+        return sendJson(res, 200, await jf.children(url.searchParams.get('id') ?? ''))
+    }
     if (method === 'GET' && path === '/api/sessions') {
         const sessions = (await jf.sessions()).filter(s => s.SupportsRemoteControl)
         return sendJson(res, 200, sessions.map(s => ({ id: s.Id, label: `${s.UserName ?? 'Unknown'} – ${s.DeviceName} (${s.Client})`, device: `${s.DeviceName} (${s.Client})` })))
@@ -411,6 +414,7 @@ async function checkJellyfin(): Promise<void> {
     const before = jellyfinError
     try {
         const info = await jf.systemInfo()
+        await jf.resolveUser()
         jellyfinError = null
         if (before !== null) {
             console.log(`Connected to Jellyfin "${info.ServerName}" ${info.Version}`)

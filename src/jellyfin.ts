@@ -28,8 +28,10 @@ export type Jellyfin = ReturnType<typeof createJellyfin>
 
 export const normalizeId = (id: string): string => id.replaceAll('-', '').toLowerCase()
 
-/** Requires Jellyfin 10.9+ (user-less /Items with an API key) unless userId is given. */
+/** Without a userId, resolveUser() picks an administrator: Jellyfin 10.11 rejects PlaybackInfo without one. */
 export function createJellyfin(baseUrl: string, apiKey: string, userId?: string) {
+
+    let user = userId
 
     const auth = `MediaBrowser Token="${apiKey}"`
 
@@ -54,21 +56,42 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
     const session = (id: string) => `/Sessions/${encodeURIComponent(id)}/Playing`
     const ticks = (seconds: number) => String(Math.round(seconds * TICKS_PER_SECOND))
     const listItems = (query: URLSearchParams) => {
-        if (userId) {
-            query.set('userId', userId)
+        if (user) {
+            query.set('userId', user)
         }
         return json<{ Items: JfItem[] }>(`/Items?${query}`)
     }
 
     return {
         raw,
-        userId,
+        get userId() {
+            return user
+        },
+        /** Uses the first administrator when no user was configured. */
+        async resolveUser(): Promise<void> {
+            if (!user) {
+                const users = await json<Array<{ Id: string; Name: string; Policy?: { IsAdministrator?: boolean } }>>('/Users')
+                const admin = users.find(u => u.Policy?.IsAdministrator)
+                if (!admin) {
+                    throw new Error('No administrator user found; set JELLYFIN_USER_ID')
+                }
+                user = admin.Id
+                console.log(`Using Jellyfin user "${admin.Name}"`)
+            }
+        },
         /** Removes the api key from text headed to guests, without exposing the key itself. */
         redact: (text: string): string => text.replaceAll(apiKey, ''),
         systemInfo: () => json<{ ServerName: string; Version: string }>('/System/Info'),
 
         async search(term: string): Promise<Array<{ id: string; name: string; type: string }>> {
             const query = new URLSearchParams({ searchTerm: term, IncludeItemTypes: 'Movie,Series,Season,Episode', Recursive: 'true', Limit: '25' })
+            const res = await listItems(query)
+            return res.Items.map(i => ({ id: i.Id, name: label(i), type: i.Type }))
+        },
+
+        /** Seasons of a series, or episodes of a season, in order. */
+        async children(id: string): Promise<Array<{ id: string; name: string; type: string }>> {
+            const query = new URLSearchParams({ ParentId: id, IncludeItemTypes: 'Season,Episode', IsMissing: 'false', ExcludeLocationTypes: 'Virtual', SortBy: 'ParentIndexNumber,IndexNumber,SortName' })
             const res = await listItems(query)
             return res.Items.map(i => ({ id: i.Id, name: label(i), type: i.Type }))
         },
