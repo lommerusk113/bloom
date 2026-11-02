@@ -73,8 +73,7 @@ test('removing the playing last item stops instead of replaying the previous one
     apply(room, { type: 'jump', index: 2 }, true, 0)
     assert.equal(room.playing, true)
     apply(room, { type: 'queueRemove', index: 2 }, true, 0)
-    assert.equal(room.playing, false)
-    assert.equal(room.position, 0)
+    assert.deepEqual([room.index, room.position, room.playing], [1, 200, false])
 })
 
 test('moving items follows the current item', () => {
