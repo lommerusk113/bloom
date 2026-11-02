@@ -226,9 +226,15 @@ async function home() {
     const token = browseToken
     $('rows').replaceChildren(...views.map((v) => {
         const section = el('section', 'shelf')
-        const head = button(`Recently added in ${v.name} ›`, () => openLibrary(v), { className: 'shelf-title' })
         const strip = el('div', 'strip')
         strip.append(el('span', 'muted', 'Loading…'))
+        const page = (direction) => strip.scrollBy({ left: direction * strip.clientWidth * 0.9, behavior: 'smooth' })
+        const head = el('div', 'shelf-head')
+        head.append(
+            button(`Recently added in ${v.name} ›`, () => openLibrary(v), { className: 'shelf-title' }),
+            button('‹', () => page(-1), { className: 'shelf-arrow', title: 'Scroll left' }),
+            button('›', () => page(1), { className: 'shelf-arrow', title: 'Scroll right' }),
+        )
         section.append(head, strip)
         api(`/api/latest?parent=${encodeURIComponent(v.id)}`).then((items) => {
             if (token === browseToken) {
@@ -355,7 +361,8 @@ function render() {
     const { room, viewers } = state
     const item = room.queue[room.index]
     $('guestControl').checked = room.guestControl
-    $('nowTitle').textContent = item?.name ?? 'Nothing yet'
+    $('nowHeading').textContent = !item ? 'Nothing playing' : room.waiting ? 'Loading…' : room.playing ? 'Now playing' : 'Paused'
+    $('nowTitle').textContent = item?.name ?? 'Queue is empty'
     $('toggle').disabled = !item
     $('next').disabled = room.index >= room.queue.length - 1
     $('toggle').textContent = room.playing ? '⏸ Pause' : '▶ Play'

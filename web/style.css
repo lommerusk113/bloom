@@ -162,3 +162,18 @@ google-cast-launcher { display: inline-block; width: 26px; height: 26px; margin:
 .dialog-close button { background: none; border: none; font-size: 1.1em; }
 .dialog-actions { justify-content: flex-end; }
 .danger-link { color: var(--error) !important; justify-self: start; font-size: .85em; margin-top: 4px; }
+
+/* scrolling: thin dark scrollbars everywhere, none on shelves (arrows instead) */
+* { scrollbar-width: thin; scrollbar-color: #3a3a3a transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
+html { scroll-behavior: smooth; }
+.strip { scrollbar-width: none; scroll-snap-type: x mandatory; scroll-padding: 0; overscroll-behavior-x: contain;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
+.strip::-webkit-scrollbar { display: none; }
+.shelf-head { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.shelf-head .shelf-title { margin: 0 auto 0 0; }
+.shelf-arrow { width: 32px; height: 32px; padding: 0; border-radius: 50%; font-size: 1.2em; line-height: 1; }
+.sidebar { scrollbar-gutter: stable; }
