@@ -19,3 +19,7 @@ test('search and queueItems pass userId when set', async (t) => {
     await createJellyfin('http://jf', 'key').search('a')
     assert.equal(new URL(urls[2]).searchParams.get('userId'), null)
 })
+
+test('redact removes the api key from text', () => {
+    assert.equal(createJellyfin('http://jf', 'k3y').redact('a?api_key=k3y&b=k3y'), 'a?api_key=&b=')
+})

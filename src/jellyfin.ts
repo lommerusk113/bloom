@@ -63,6 +63,8 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
     return {
         raw,
         userId,
+        /** Removes the api key from text headed to guests, without exposing the key itself. */
+        redact: (text: string): string => text.replaceAll(apiKey, ''),
         systemInfo: () => json<{ ServerName: string; Version: string }>('/System/Info'),
 
         async search(term: string): Promise<Array<{ id: string; name: string; type: string }>> {

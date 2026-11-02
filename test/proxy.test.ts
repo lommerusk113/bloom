@@ -39,6 +39,7 @@ async function serve(room: Room, jf: Jellyfin, clock = () => Date.now()) {
 function fakeJellyfin(calls: Array<[string, RequestInit]> = [], extra = {}) {
     let n = 0
     return {
+        redact: (text: string) => text,
         ...extra,
         raw: async (path: string, init: RequestInit) => {
             calls.push([path, init])
@@ -83,8 +84,14 @@ test('proxy strips api keys and paths from PlaybackInfo', async () => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     const jf = {
+        redact: (text: string) => text,
         raw: async () => new Response(JSON.stringify({
-            MediaSources: [{ Id: 'm', Path: '/media/x.mkv', TranscodingUrl: '/videos/x/master.m3u8?DeviceId=d&ApiKey=SECRET&PlaySessionId=p' }],
+            MediaSources: [{
+                Id: 'm',
+                Path: '/media/x.mkv',
+                TranscodingUrl: '/videos/x/master.m3u8?DeviceId=d&ApiKey=SECRET&PlaySessionId=p',
+                MediaStreams: [{ Type: 'Subtitle', Path: '/media/x.en.srt', DeliveryUrl: '/Videos/x/m/Subtitles/2/0/Stream.vtt?ApiKey=SECRET' }],
+            }],
         }), { headers: { 'content-type': 'application/json' } }),
     } as unknown as Jellyfin
     const { base, close } = await serve(room, jf)
@@ -92,15 +99,36 @@ test('proxy strips api keys and paths from PlaybackInfo', async () => {
     const text = await res.text()
     assert.equal(res.status, 200)
     assert.ok(!text.includes('SECRET'))
-    assert.ok(!text.includes('/media/x.mkv'))
-    assert.equal(JSON.parse(text).MediaSources[0].TranscodingUrl, '/videos/x/master.m3u8?DeviceId=d&PlaySessionId=p')
+    assert.ok(!text.includes('/media/x'))
+    const source = JSON.parse(text).MediaSources[0]
+    assert.equal(source.TranscodingUrl, '/videos/x/master.m3u8?DeviceId=d&PlaySessionId=p')
+    assert.equal(source.MediaStreams[0].DeliveryUrl, '/Videos/x/m/Subtitles/2/0/Stream.vtt')
+    close()
+})
+
+test('proxy redacts the literal api key from every text body', async () => {
+    const room = createRoom('r', 0)
+    room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
+    const jf = {
+        redact: (text: string) => text.replaceAll('KEY123', ''),
+        raw: async (path: string) => path.includes('/PlaybackInfo')
+            ? Response.json({ PlaySessionId: 'p', ErrorCode: 'token KEY123', MediaSources: [] })
+            : new Response('#EXTM3U\n#EXT-X-KEY:URI="k?token=KEY123"\n'),
+    } as unknown as Jellyfin
+    const { base, close } = await serve(room, jf)
+    const info = await (await playbackInfo(base)).text()
+    const playlist = await (await fetch(`${base}/Videos/${ITEM}/master.m3u8?PlaySessionId=p`)).text()
+    for (const text of [info, playlist]) {
+        assert.ok(text.length > 0)
+        assert.ok(!text.includes('KEY123'), text)
+    }
     close()
 })
 
 test('proxy returns 502 for non-JSON PlaybackInfo on success', async () => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
-    const jf = { raw: async () => new Response('not json') } as unknown as Jellyfin
+    const jf = { redact: (text: string) => text, raw: async () => new Response('not json') } as unknown as Jellyfin
     const { base, close } = await serve(room, jf)
     const res = await fetch(`${base}/Items/${ITEM}/PlaybackInfo`, { method: 'POST', body: '{}' })
     assert.equal(res.status, 502)

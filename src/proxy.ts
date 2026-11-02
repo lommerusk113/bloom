@@ -47,7 +47,8 @@ export function stripApiKeys(playlist: string): string {
 }
 
 /**
- * Removes the api key query params from each MediaSource.TranscodingUrl and drops the filesystem Path.
+ * Removes the api key query params from each MediaSource.TranscodingUrl and MediaStream.DeliveryUrl
+ * and drops the filesystem Paths.
  * Records the PlaySessionIds it finds in playSessions as seen at now.
  */
 export function sanitizePlaybackInfo(body: string, playSessions = new Map<string, number>(), now = Date.now()): string {
@@ -57,6 +58,12 @@ export function sanitizePlaybackInfo(body: string, playSessions = new Map<string
     }
     for (const source of info?.MediaSources ?? []) {
         delete source.Path
+        for (const stream of source.MediaStreams ?? []) {
+            delete stream.Path
+            if (typeof stream.DeliveryUrl === 'string') {
+                stream.DeliveryUrl = stripApiKeys(stream.DeliveryUrl)
+            }
+        }
         if (typeof source.TranscodingUrl === 'string') {
             const url = new URL(source.TranscodingUrl, 'http://proxy')
             for (const name of [...url.searchParams.keys()]) {
@@ -161,7 +168,7 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
 
     if (url.pathname.toLowerCase().endsWith('.m3u8')) {
         delete out['content-length']
-        res.writeHead(upstream.status, out).end(stripApiKeys(await upstream.text()))
+        res.writeHead(upstream.status, out).end(jf.redact(stripApiKeys(await upstream.text())))
         return
     }
 
@@ -170,10 +177,10 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
         delete out['content-length']
         try {
             const clean = sanitizePlaybackInfo(text, playSessions, now)
-            res.writeHead(upstream.status, out).end(clean)
+            res.writeHead(upstream.status, out).end(jf.redact(clean))
         } catch {
             const ok = upstream.status >= 200 && upstream.status < 300
-            res.writeHead(ok ? 502 : upstream.status, out).end(ok ? undefined : text)
+            res.writeHead(ok ? 502 : upstream.status, out).end(ok ? undefined : jf.redact(text))
         }
         return
     }
