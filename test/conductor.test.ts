@@ -311,3 +311,27 @@ test('a room change while PlayNow loads does not re-send it', async () => {
     await conductor.tick(NOW + 2000)
     assert.deepEqual(calls, [`play ${ITEM} 100`])
 })
+
+for (const [what, drop] of [
+    ['removed from the room', (r: Room) => { r.nativeSessions.splice(1, 1) }],
+    ['in a deleted room', (_r: Room, rooms: Map<string, Room>) => { rooms.delete('r1') }],
+] as const) {
+    test(`a session ${what} during an earlier send gets no step`, async () => {
+        const r = room()
+        r.nativeSessions.push(
+            { sessionId: 's1', label: 'TV', device: 'TV', trusted: false, status: 'syncing' },
+            { sessionId: 's2', label: 'TV', device: 'TV', trusted: false, status: 'syncing' },
+        )
+        const rooms = new Map([[r.id, r]])
+        const calls: string[] = []
+        const jf = {
+            sessions: async () => [session(0, { item: OTHER }), { ...session(0, { item: OTHER }), Id: 's2' }],
+            playNow: async (id: string) => {
+                calls.push(id)
+                drop(r, rooms)
+            },
+        } as unknown as Jellyfin
+        await createConductor(jf, rooms, () => {}).tick(NOW)
+        assert.deepEqual(calls, ['s1'])
+    })
+}
