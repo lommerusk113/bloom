@@ -4,6 +4,7 @@ import { deviceProfile, playbackInfo, proxied, subtitlePath, withDevice } from '
 
 const COOLDOWN_MS = 3000
 const SEEK_COOLDOWN_MS = 8000 // a seek can restart the transcode; give it time to land
+const MAX_RETRY_MS = 30_000
 
 export function setupCast({ roomId, deviceId, getState }) {
     const castDevice = `${deviceId}-cast`
@@ -14,6 +15,7 @@ export function setupCast({ roomId, deviceId, getState }) {
     let lastSeek = 0
     let seekLead = 3
     let pendingSeek = false
+    let loadFailures = 0
 
     function init() {
         const context = cast.framework.CastContext.getInstance()
@@ -25,6 +27,7 @@ export function setupCast({ roomId, deviceId, getState }) {
         controller = new cast.framework.RemotePlayerController(player)
         controller.addEventListener(cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED, () => {
             loadedItem = null
+            loadFailures = 0
         })
     }
 
@@ -76,16 +79,22 @@ export function setupCast({ roomId, deviceId, getState }) {
         sync(target) {
             const { room } = getState()
             const item = room.queue[room.index]
-            if (!item || Date.now() - lastAction < COOLDOWN_MS) {
+            // failed loads back off: 3s, 6s, 12s ... up to 30s
+            const cooldown = Math.min(COOLDOWN_MS * 2 ** Math.max(0, loadFailures - 1), MAX_RETRY_MS)
+            if (!item || Date.now() - lastAction < cooldown) {
                 return
             }
             if (loadedItem !== item.id) {
                 loadedItem = item.id
                 lastAction = Date.now()
                 pendingSeek = false
-                load(item, target, room.playing).catch((err) => {
+                load(item, target, room.playing).then(() => {
+                    loadFailures = 0
+                }, (err) => {
                     console.error('Cast load failed', err)
                     loadedItem = null
+                    loadFailures++
+                    lastAction = Date.now()
                 })
                 return
             }
