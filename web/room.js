@@ -270,7 +270,7 @@ function syncNow() {
     if (!current?.source || video.readyState === 0 || video.seeking) {
         return
     }
-    if (room.playing && video.paused) {
+    if (room.playing && video.paused && !video.ended) {
         video.play().then(() => { $('tap').hidden = true }).catch(() => { $('tap').hidden = false })
     }
     if (!room.playing && !video.paused) {
