@@ -10,9 +10,9 @@ test('correct password yields a token that identifies the host', () => {
     assert.equal(auth.login('wrong', '1.1.1.1'), null)
     const token = auth.login('secret', '1.1.1.1')
     assert.ok(token)
-    assert.equal(auth.isHost(withCookie(`other=1; wp_host=${token}`)), true)
-    assert.equal(auth.isHost(withCookie('wp_host=forged')), false)
-    assert.equal(auth.isHost(withCookie()), false)
+    assert.equal(auth.isLoggedIn(withCookie(`other=1; wp_host=${token}`)), true)
+    assert.equal(auth.isLoggedIn(withCookie('wp_host=forged')), false)
+    assert.equal(auth.isLoggedIn(withCookie()), false)
 })
 
 test('logins are blocked after 10 failures per ip for 15 minutes', () => {

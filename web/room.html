@@ -14,39 +14,57 @@
     <h1>Join the watch party</h1>
     <p class="muted">Pick a name so the others know who is watching.</p>
     <input id="name" placeholder="Your name" maxlength="32" required autofocus>
+    <input id="password" type="password" placeholder="Room password" hidden>
+    <p id="joinError" class="error"></p>
     <button class="primary">Join</button>
 </form>
 
 <main id="player" hidden>
-    <header class="bar">
-        <div>
-            <div id="title" class="now-title">Waiting for the host to pick something…</div>
-            <div id="lock" class="muted" hidden>Only the host can control playback</div>
-        </div>
-        <div id="viewers" class="chips"></div>
-    </header>
     <div class="stage">
         <video id="video" playsinline></video>
         <button id="tap" hidden>▶ Tap to start</button>
         <p id="status"></p>
-    </div>
-    <div class="controls">
-        <button id="toggle" aria-label="Play or pause">▶</button>
-        <input id="seek" type="range" min="0" max="0" step="1" value="0" aria-label="Seek">
-        <span id="time">0:00 / 0:00</span>
-        <button id="next" aria-label="Next item">⏭</button>
-        <select id="audio" aria-label="Audio track"></select>
-        <select id="subs" aria-label="Subtitles"></select>
-        <select id="quality" aria-label="Quality">
-            <option value="">Original</option>
-            <option value="20000000">20 Mbps</option>
-            <option value="8000000">8 Mbps</option>
-            <option value="4000000">4 Mbps</option>
-            <option value="1500000">1.5 Mbps</option>
-        </select>
-        <google-cast-launcher aria-label="Cast"></google-cast-launcher>
-        <button id="fullscreen" aria-label="Fullscreen">⛶</button>
-        <button id="endRoom" class="danger" hidden>End room</button>
+        <div class="osd">
+            <header class="osd-top">
+                <div>
+                    <div id="title" class="osd-title">Waiting for the host to pick something…</div>
+                    <div id="lock" class="osd-sub" hidden>Only the host can control playback</div>
+                </div>
+                <div id="viewers" class="chips"></div>
+            </header>
+            <div class="osd-bottom">
+                <div class="osd-progress">
+                    <span id="elapsed" class="osd-time">0:00</span>
+                    <input id="seek" type="range" min="0" max="0" step="1" value="0" aria-label="Seek">
+                    <span id="duration" class="osd-time">0:00</span>
+                </div>
+                <div class="osd-buttons">
+                    <div class="osd-group">
+                        <button id="back" class="icon" title="Back 10 seconds" aria-label="Back 10 seconds"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg></button>
+                        <button id="toggle" class="icon big" title="Play / pause (space)" aria-label="Play or pause"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></button>
+                        <button id="forward" class="icon" title="Forward 30 seconds" aria-label="Forward 30 seconds"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"/></svg></button>
+                        <button id="next" class="icon" title="Next" aria-label="Next item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
+                    </div>
+                    <div class="osd-group">
+                        <button id="endRoom" class="danger" hidden>End room</button>
+                        <button id="settingsButton" class="icon" title="Audio, subtitles and quality" aria-label="Audio, subtitles and quality" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87a.47.47 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.47.47 0 0 0-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg></button>
+                        <google-cast-launcher aria-label="Cast"></google-cast-launcher>
+                        <button id="fullscreen" class="icon" title="Fullscreen" aria-label="Fullscreen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>
+                    </div>
+                </div>
+            </div>
+            <div id="settings" class="osd-panel" hidden>
+                <label>Audio<select id="audio"></select></label>
+                <label>Subtitles<select id="subs"></select></label>
+                <label>Quality<select id="quality">
+                    <option value="">Original</option>
+                    <option value="20000000">20 Mbps</option>
+                    <option value="8000000">8 Mbps</option>
+                    <option value="4000000">4 Mbps</option>
+                    <option value="1500000">1.5 Mbps</option>
+                </select></label>
+            </div>
+        </div>
     </div>
 </main>
 <script type="module" src="/web/room.js"></script>

@@ -78,8 +78,9 @@ async function start() {
         return
     }
     const rooms = await api('/api/rooms')
-    if (roomId && rooms.some(r => r.id === roomId)) {
-        manage()
+    const room = rooms.find(r => r.id === roomId)
+    if (room) {
+        manage(room)
     } else {
         lobby(rooms)
     }
@@ -101,8 +102,25 @@ function lobby(rooms) {
     }
 }
 
-function manage() {
+function showPassword(password) {
+    $('roomPassword').value = password
+    $('savePassword').textContent = password ? 'Change' : 'Set password'
+    $('passwordNote').textContent = password ? `Guests must enter “${password}” to join.` : 'No password: anyone with the link can join.'
+}
+
+function manage(room) {
     $('manage').hidden = false
+    showPassword(room.password)
+    $('passwordForm').onsubmit = async (event) => {
+        event.preventDefault()
+        const password = $('roomPassword').value.trim()
+        try {
+            await postJson(`/api/rooms/${roomId}/password`, { password })
+            showPassword(password)
+        } catch (err) {
+            showStatus(err.message)
+        }
+    }
     const url = `${location.origin}/r/${roomId}`
     $('link').value = url
     $('open').href = url

@@ -144,6 +144,39 @@ test('only the host can end a room, which disconnects everyone with 4404', async
     assert.equal((await fetch(`${BASE}/api/rooms/${id}`, { method: 'DELETE', headers: { cookie } })).status, 404)
 })
 
+test('a room password keeps out guests until they enter it', async () => {
+    const cookie = await login()
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
+    const setPassword = (password: string, headers: Record<string, string> = { cookie }) =>
+        fetch(`${BASE}/api/rooms/${id}/password`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+    assert.equal((await setPassword('open sesame', {})).status, 403)
+    assert.equal((await setPassword('open sesame')).status, 200)
+
+    const access = async (headers = {}) => (await (await fetch(`${BASE}/api/rooms/${id}/access`, { headers })).json()) as { locked: boolean; allowed: boolean }
+    assert.deepEqual(await access(), { locked: true, allowed: false })
+    assert.deepEqual(await access({ cookie }), { locked: true, allowed: true })
+    const locked = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`)
+    assert.equal((await once(locked, 'close'))[0], 4401)
+    const playbackInfo = (headers = {}) => fetch(`${BASE}/r/${id}/jf/Items/${'a'.repeat(32)}/PlaybackInfo`, { method: 'POST', headers })
+    assert.equal((await playbackInfo()).status, 401)
+
+    const join = (password: string) => fetch(`${BASE}/api/rooms/${id}/join`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+    assert.equal((await join('wrong')).status, 401)
+    const ok = await join('open sesame')
+    assert.equal(ok.status, 200)
+    const guestCookie = ok.headers.get('set-cookie')!.split(';')[0]
+    assert.deepEqual(await access({ cookie: guestCookie }), { locked: true, allowed: true })
+    assert.equal((await playbackInfo({ cookie: guestCookie })).status, 404) // past the lock: item not in queue
+    const guest = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`, { headers: { cookie: guestCookie } })
+    await once(guest, 'open')
+    guest.close()
+
+    const rooms = (await (await fetch(`${BASE}/api/rooms`, { headers: { cookie } })).json()) as Array<{ id: string; password: string }>
+    assert.equal(rooms.find(r => r.id === id)?.password, 'open sesame')
+    assert.equal((await setPassword('')).status, 200)
+    assert.deepEqual(await access(), { locked: false, allowed: true })
+})
+
 test('a malformed upgrade target does not crash the server', async () => {
     const socket = connect(PORT, '127.0.0.1')
     await once(socket, 'connect')

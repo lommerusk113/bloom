@@ -40,8 +40,9 @@ Watchparty never encodes video itself. Every guest gets an HLS stream from Jelly
 
 1. Open the external URL, log in, create a room, search and add things to the queue.
 2. Share the room link. Guests enter a name and watch.
-3. **Guests may pause, seek and skip** decides whether guests may control playback; the host always can.
-4. **End room** (host page, or the player page when logged in as host) stops it for everyone: guests are disconnected and the room's transcodes stop. Rooms nobody is watching are also removed after 30 minutes.
+3. Optionally set a **room password** under Invite people; guests then enter it before joining (you never need it).
+4. **Guests may pause, seek and skip** decides whether guests may control playback; the host always can.
+5. **End room** (host page, or the player page when logged in as host) stops it for everyone: guests are disconnected and the room's transcodes stop. Rooms nobody is watching are also removed after 30 minutes.
 
 Browsers sync to within about 0.3 seconds.
 

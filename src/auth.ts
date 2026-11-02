@@ -1,13 +1,13 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 
-const COOKIE = 'wp_host'
 const MAX_AGE_S = 30 * 24 * 3600
 const MAX_FAILURES = 10
 const WINDOW_MS = 15 * 60_000
 
-// ponytail: tokens live in memory, so a restart logs the host out. Fine for one host.
-export function createAuth(password: string, secure: boolean) {
+/** Password login with a session cookie; used for the host and for each password-protected room. */
+// ponytail: tokens live in memory, so a restart logs everyone out.
+export function createAuth(password: string, secure: boolean, cookieName = 'wp_host') {
 
     const expected = digest(password)
     const tokens = new Set<string>()
@@ -44,13 +44,13 @@ export function createAuth(password: string, secure: boolean) {
             return failures.size
         },
 
-        isHost(req: IncomingMessage): boolean {
-            const token = parseCookies(req.headers.cookie).get(COOKIE)
+        isLoggedIn(req: IncomingMessage): boolean {
+            const token = parseCookies(req.headers.cookie).get(cookieName)
             return token !== undefined && tokens.has(token)
         },
 
         cookie(token: string): string {
-            return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${MAX_AGE_S}${secure ? '; Secure' : ''}`
+            return `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${MAX_AGE_S}${secure ? '; Secure' : ''}`
         },
     }
 }

@@ -44,8 +44,24 @@ const deviceId = recall('wp_device') ?? (crypto.randomUUID?.() ?? Math.random().
 store('wp_device', deviceId)
 
 $('name').value = recall('wp_name') ?? ''
-$('join').onsubmit = (event) => {
+fetch(`/api/rooms/${roomId}/access`).then(res => res.json()).then(({ locked, allowed }) => {
+    $('password').hidden = !(locked && !allowed)
+    $('password').required = locked && !allowed
+}).catch(() => {}) // unknown room: the socket reports it as gone
+
+$('join').onsubmit = async (event) => {
     event.preventDefault()
+    if (!$('password').hidden) {
+        const res = await fetch(`/api/rooms/${roomId}/join`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ password: $('password').value }),
+        }).catch(() => null)
+        if (!res?.ok) {
+            $('joinError').textContent = res?.status === 401 ? 'Wrong password' : 'Could not join, try again'
+            return
+        }
+    }
     const name = $('name').value.trim()
     store('wp_name', name)
     $('join').hidden = true
@@ -67,12 +83,17 @@ function onMessage(msg) {
         $('status').textContent = msg.message
         return
     }
+    if (msg.type === 'locked') {
+        // the host set a password after this page loaded: back to the join form, which now asks for it
+        location.reload()
+        return
+    }
     if (msg.type === 'gone') {
         state = null // syncNow stops driving the player and Chromecast
         cast?.stop()
         unloadStream()
         $('endRoom').hidden = true
-        for (const id of ['toggle', 'seek', 'next']) {
+        for (const id of CONTROLS) {
             $(id).disabled = true // their handlers read state
         }
         $('status').textContent = 'This room no longer exists'
@@ -286,9 +307,46 @@ $('quality').onchange = () => {
 // --- controls ---
 
 const command = (cmd) => socket.send({ type: 'cmd', cmd })
+const CONTROLS = ['toggle', 'seek', 'next', 'back', 'forward']
+const PLAY_ICON = 'M8 5v14l11-7z'
+const PAUSE_ICON = 'M6 19h4V5H6v14zm8-14v14h4V5h-4z'
 
 $('toggle').onclick = () => command({ type: state.room.playing ? 'pause' : 'play' })
 $('next').onclick = () => command({ type: 'next' })
+$('back').onclick = () => command({ type: 'seek', position: Math.max(0, currentTarget() - 10) })
+$('forward').onclick = () => command({ type: 'seek', position: currentTarget() + 30 })
+$('settingsButton').onclick = (event) => {
+    event.stopPropagation()
+    $('settings').hidden = !$('settings').hidden
+    $('settingsButton').setAttribute('aria-expanded', String(!$('settings').hidden))
+}
+$('settings').onclick = (event) => event.stopPropagation()
+document.addEventListener('click', () => {
+    $('settings').hidden = true
+    $('settingsButton').setAttribute('aria-expanded', 'false')
+})
+video.onclick = () => {
+    // with a mouse a click toggles like Jellyfin; on touch screens a tap only brings the controls back
+    if (matchMedia('(hover: hover)').matches && !$('toggle').disabled) {
+        $('toggle').click()
+    }
+}
+video.ondblclick = () => $('fullscreen').click()
+
+// like Jellyfin: the controls fade out while playing and come back on any movement
+let idleTimer = 0
+function wake() {
+    $('player').classList.remove('idle')
+    clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+        if (state?.room.playing && $('settings').hidden && !dragging) {
+            $('player').classList.add('idle')
+        }
+    }, 3000)
+}
+for (const type of ['mousemove', 'touchstart', 'keydown', 'click']) {
+    document.addEventListener(type, wake, { passive: true })
+}
 $('endRoom').onclick = async () => {
     if (!confirm('End the room for everyone?')) {
         return
@@ -338,10 +396,10 @@ function render() {
     const { room, viewers } = state
     const item = room.queue[room.index]
     const canControl = isHost || room.guestControl
-    for (const id of ['toggle', 'seek', 'next']) {
+    for (const id of CONTROLS) {
         $(id).disabled = !canControl || !item
     }
-    $('toggle').textContent = room.playing ? '⏸' : '▶'
+    $('toggle').querySelector('path').setAttribute('d', room.playing ? PAUSE_ICON : PLAY_ICON)
     $('seek').max = String(Math.floor(item?.runtime ?? 0))
     $('title').textContent = item?.name ?? 'Waiting for the host to pick something…'
     $('lock').hidden = canControl
@@ -399,7 +457,10 @@ function syncNow() {
     if (!dragging) {
         $('seek').value = String(Math.floor(target))
     }
-    $('time').textContent = `${clock(dragging ? Number($('seek').value) : target)} / ${clock(runtime)}`
+    const shown = dragging ? Number($('seek').value) : target
+    $('elapsed').textContent = clock(shown)
+    $('duration').textContent = clock(runtime)
+    $('seek').style.setProperty('--pct', `${runtime ? Math.min(100, (shown / runtime) * 100) : 0}%`)
 
     if (cast?.active()) {
         if (!video.paused) {

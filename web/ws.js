@@ -1,6 +1,9 @@
 import { median, nextBackoff } from './sync.js'
 
-/** Reconnecting websocket to a room. onMessage gets every server message except clock pongs, and { type: 'gone' } once the room is deleted. */
+/**
+ * Reconnecting websocket to a room. onMessage gets every server message except clock pongs,
+ * { type: 'gone' } once the room is deleted and { type: 'locked' } when it needs a password this browser lacks.
+ */
 export function connectRoom(roomId, name, onMessage) {
     const samples = []
     let ws = null
@@ -41,6 +44,10 @@ export function connectRoom(roomId, name, onMessage) {
         ws.onclose = (event) => {
             if (event.code === 4404) {
                 onMessage({ type: 'gone' })
+                return
+            }
+            if (event.code === 4401) {
+                onMessage({ type: 'locked' })
                 return
             }
             onMessage({ type: 'error', message: 'Connection lost – reconnecting…' })

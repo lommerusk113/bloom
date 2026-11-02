@@ -31,7 +31,10 @@ const PORT = Number(process.env.PORT ?? 8080)
 const PUBLIC_URL = process.env.PUBLIC_URL ?? `http://localhost:${PORT}`
 const PUBLIC_HOST = new URL(PUBLIC_URL).host
 const jf = createJellyfin(required('JELLYFIN_URL').replace(/\/$/, ''), required('JELLYFIN_API_KEY'), process.env.JELLYFIN_USER_ID || undefined)
-const auth = createAuth(required('HOST_PASSWORD'), PUBLIC_URL.startsWith('https:'))
+const SECURE = PUBLIC_URL.startsWith('https:')
+const auth = createAuth(required('HOST_PASSWORD'), SECURE)
+/** Room passwords, kept out of Room so they are never broadcast. */
+const locks = new Map<string, { password: string; auth: ReturnType<typeof createAuth> }>()
 
 const rooms = new Map<string, Room>()
 const clients = new Map<string, Set<Client>>()
@@ -112,7 +115,13 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 }
 
 function roomSummary(room: Room) {
-    return { id: room.id, title: room.queue[room.index]?.name ?? 'Empty room', viewers: clients.get(room.id)?.size ?? 0 }
+    return { id: room.id, title: room.queue[room.index]?.name ?? 'Empty room', viewers: clients.get(room.id)?.size ?? 0, password: locks.get(room.id)?.password ?? '' }
+}
+
+/** The host, anyone in a room without a password, or a guest who entered it. */
+function mayJoin(req: IncomingMessage, room: Room): boolean {
+    const lock = locks.get(room.id)
+    return !lock || auth.isLoggedIn(req) || lock.auth.isLoggedIn(req)
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -124,7 +133,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const proxied = /^\/r\/([\w-]+)\/jf(\/.*)$/.exec(path)
     if (proxied) {
         const room = rooms.get(proxied[1])
-        return room ? proxyRequest(req, res, room, proxied[2] + url.search, jf) : sendJson(res, 404, { error: 'Room not found' })
+        if (!room) {
+            return sendJson(res, 404, { error: 'Room not found' })
+        }
+        // HLS and subtitles are fetched cookie-less by Chromecast; they are bound to play sessions PlaybackInfo issued
+        if (/\/PlaybackInfo$/i.test(proxied[2]) && !mayJoin(req, room)) {
+            return sendJson(res, 401, { error: 'Room password required' })
+        }
+        return proxyRequest(req, res, room, proxied[2] + url.search, jf)
     }
 
     if (method === 'GET') {
@@ -145,7 +161,31 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             return sendJson(res, 200, { ok: true })
         }
         if (path === '/api/me') {
-            return sendJson(res, 200, { host: auth.isHost(req), jellyfinError })
+            return sendJson(res, 200, { host: auth.isLoggedIn(req), jellyfinError })
+        }
+    }
+
+    const roomAccess = /^\/api\/rooms\/([\w-]+)\/(access|join)$/.exec(path)
+    if (roomAccess) {
+        const room = rooms.get(roomAccess[1])
+        if (!room) {
+            return sendJson(res, 404, { error: 'Room not found' })
+        }
+        if (method === 'GET' && roomAccess[2] === 'access') {
+            return sendJson(res, 200, { locked: locks.has(room.id), allowed: mayJoin(req, room) })
+        }
+        if (method === 'POST' && roomAccess[2] === 'join') {
+            const lock = locks.get(room.id)
+            const body = await readJson(req)
+            const token = lock?.auth.login(String(body.password ?? ''), req.socket.remoteAddress ?? '')
+            if (!lock) {
+                return sendJson(res, 200, { ok: true })
+            }
+            if (!token) {
+                return sendJson(res, 401, { error: 'Wrong password' })
+            }
+            res.setHeader('set-cookie', lock.auth.cookie(token))
+            return sendJson(res, 200, { ok: true })
         }
     }
 
@@ -160,7 +200,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         return sendJson(res, 200, { ok: true })
     }
 
-    if (!auth.isHost(req)) {
+    if (!auth.isLoggedIn(req)) {
         return sendJson(res, 403, { error: 'Host login required' })
     }
 
@@ -171,6 +211,20 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         const id = randomBytes(16).toString('base64url')
         rooms.set(id, createRoom(id, Date.now()))
         return sendJson(res, 200, { id })
+    }
+    const setting = method === 'POST' ? /^\/api\/rooms\/([\w-]+)\/password$/.exec(path) : null
+    if (setting) {
+        const room = rooms.get(setting[1])
+        if (!room) {
+            return sendJson(res, 404, { error: 'Room not found' })
+        }
+        const password = String((await readJson(req)).password ?? '').slice(0, 100)
+        if (password) {
+            locks.set(room.id, { password, auth: createAuth(password, SECURE, `wp_room_${room.id}`) })
+        } else {
+            locks.delete(room.id)
+        }
+        return sendJson(res, 200, { ok: true })
     }
     const ending = method === 'DELETE' ? /^\/api\/rooms\/([\w-]+)$/.exec(path) : null
     if (ending) {
@@ -227,6 +281,7 @@ async function endRoom(room: Room): Promise<void> {
 
     rooms.delete(room.id)
     emptySince.delete(room.id)
+    locks.delete(room.id)
     for (const client of clients.get(room.id) ?? []) {
         client.ws.close(4404, 'Room ended')
     }
@@ -255,11 +310,15 @@ server.on('upgrade', (req, socket, head) => {
             wss.handleUpgrade(req, socket, head, ws => ws.close(4404, 'Room not found'))
             return
         }
+        if (!mayJoin(req, room)) {
+            wss.handleUpgrade(req, socket, head, ws => ws.close(4401, 'Room password required'))
+            return
+        }
         if ((clients.get(room.id)?.size ?? 0) >= MAX_CLIENTS_PER_ROOM) {
             socket.destroy()
             return
         }
-        wss.handleUpgrade(req, socket, head, ws => onJoin(ws, room, auth.isHost(req)))
+        wss.handleUpgrade(req, socket, head, ws => onJoin(ws, room, auth.isLoggedIn(req)))
     } catch (err) {
         console.error('Upgrade failed:', (err as Error).message)
         socket.destroy()
@@ -374,6 +433,7 @@ setInterval(() => {
     advanced.forEach(broadcast)
     for (const id of deleted) {
         clients.delete(id)
+        locks.delete(id)
     }
 }, 1000)
 

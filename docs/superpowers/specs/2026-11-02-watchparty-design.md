@@ -155,6 +155,7 @@ Host-only endpoints (search library, add to queue) call `jellyfin` directly behi
 * Host session via HTTP-only, `SameSite=Strict` cookie after password check; constant-time compare; basic rate limit on login.
 * Room ids from `crypto.randomBytes(16)`, base64url.
 * Proxy allowlist as above; no library browsing for guests.
+* Optional room password set by the host (`POST /api/rooms/:id/password`, kept outside the broadcast room state): guests trade it at `POST /api/rooms/:id/join` for an HttpOnly per-room cookie (same rate limit as host login); without it the websocket closes with 4401 and `PlaybackInfo` returns 401. HLS and subtitles stay cookie-less for Chromecast and are bound to issued play sessions instead.
 * Websocket `Origin` must match the `Host` header or `PUBLIC_URL`'s host.
 * Websocket rate limit: 20 messages per second per client; excess dropped; a client over the limit for 5 consecutive seconds is disconnected.
 * At most 50 websocket clients per room (further upgrades are refused); a client with over 1 MB of unsent data is disconnected instead of buffering more broadcasts; a `hello` that does not change the name is not broadcast.
