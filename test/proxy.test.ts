@@ -61,3 +61,31 @@ test('proxy forwards queued items, strips keys and adds CORS', async () => {
     assert.equal(calls[0][1].get('accept-encoding'), 'identity')
     close()
 })
+
+test('proxy strips api keys and paths from PlaybackInfo', async () => {
+    const room = createRoom('r', 0)
+    room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
+    const jf = {
+        raw: async () => new Response(JSON.stringify({
+            MediaSources: [{ Id: 'm', Path: '/media/x.mkv', TranscodingUrl: '/videos/x/master.m3u8?DeviceId=d&ApiKey=SECRET&PlaySessionId=p' }],
+        }), { headers: { 'content-type': 'application/json' } }),
+    } as unknown as Jellyfin
+    const { base, close } = await serve(room, jf)
+    const res = await fetch(`${base}/Items/${ITEM}/PlaybackInfo`, { method: 'POST', body: '{}' })
+    const text = await res.text()
+    assert.equal(res.status, 200)
+    assert.ok(!text.includes('SECRET'))
+    assert.ok(!text.includes('/media/x.mkv'))
+    assert.equal(JSON.parse(text).MediaSources[0].TranscodingUrl, '/videos/x/master.m3u8?DeviceId=d&PlaySessionId=p')
+    close()
+})
+
+test('proxy returns 502 for non-JSON PlaybackInfo on success', async () => {
+    const room = createRoom('r', 0)
+    room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
+    const jf = { raw: async () => new Response('not json') } as unknown as Jellyfin
+    const { base, close } = await serve(room, jf)
+    const res = await fetch(`${base}/Items/${ITEM}/PlaybackInfo`, { method: 'POST', body: '{}' })
+    assert.equal(res.status, 502)
+    close()
+})

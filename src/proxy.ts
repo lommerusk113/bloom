@@ -30,6 +30,24 @@ export function stripApiKeys(playlist: string): string {
     return playlist.replace(/([?&])(?:api_key|apikey)=[^&\s"]*(&?)/gi, (_, sep: string, amp: string) => (amp ? sep : ''))
 }
 
+/** Removes the api key query params from each MediaSource.TranscodingUrl and drops the filesystem Path. */
+export function sanitizePlaybackInfo(body: string): string {
+    const info = JSON.parse(body)
+    for (const source of info?.MediaSources ?? []) {
+        delete source.Path
+        if (typeof source.TranscodingUrl === 'string') {
+            const url = new URL(source.TranscodingUrl, 'http://proxy')
+            for (const name of [...url.searchParams.keys()]) {
+                if (/^(api_key|apikey)$/i.test(name)) {
+                    url.searchParams.delete(name)
+                }
+            }
+            source.TranscodingUrl = url.pathname + url.search
+        }
+    }
+    return JSON.stringify(info)
+}
+
 export async function readBody(req: IncomingMessage): Promise<string> {
     let body = ''
     for await (const chunk of req) {
@@ -84,6 +102,19 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
     if (url.pathname.toLowerCase().endsWith('.m3u8')) {
         delete out['content-length']
         res.writeHead(upstream.status, out).end(stripApiKeys(await upstream.text()))
+        return
+    }
+
+    if (/\/PlaybackInfo$/i.test(url.pathname)) {
+        const text = await upstream.text()
+        delete out['content-length']
+        try {
+            const clean = sanitizePlaybackInfo(text)
+            res.writeHead(upstream.status, out).end(clean)
+        } catch {
+            const ok = upstream.status >= 200 && upstream.status < 300
+            res.writeHead(ok ? 502 : upstream.status, out).end(ok ? undefined : text)
+        }
         return
     }
 
