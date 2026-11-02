@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watchparty Host</title>
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+<main class="host">
+    <p id="jfError" class="error"></p>
+
+    <section id="login" class="card" hidden>
+        <h1>Watchparty host</h1>
+        <form id="loginForm" class="row">
+            <input id="password" type="password" placeholder="Host password" required autofocus>
+            <button>Log in</button>
+        </form>
+        <p id="loginError" class="error"></p>
+    </section>
+
+    <section id="lobby" hidden>
+        <h1>Rooms</h1>
+        <ul id="rooms"></ul>
+        <button id="newRoom">New room</button>
+    </section>
+
+    <section id="manage" hidden>
+        <p><a href="/">← Rooms</a></p>
+        <p id="status" class="error"></p>
+        <div class="row">
+            <input id="link" readonly aria-label="Guest link">
+            <button id="copy">Copy link</button>
+            <a id="open" target="_blank" rel="noopener">Open player</a>
+        </div>
+        <p><label><input id="guestControl" type="checkbox"> Guests can control playback</label></p>
+
+        <h2>Queue</h2>
+        <ol id="queue"></ol>
+        <form id="searchForm" class="row">
+            <input id="q" placeholder="Search movies, shows, episodes" required>
+            <button>Search</button>
+        </form>
+        <ul id="results"></ul>
+
+        <h2>Native Jellyfin devices</h2>
+        <p class="muted">Open the Jellyfin app on the device first, then add it here.</p>
+        <ul id="natives"></ul>
+        <div class="row">
+            <select id="sessions" aria-label="Jellyfin session"></select>
+            <button id="refreshSessions" aria-label="Refresh sessions">↻</button>
+            <label><input id="trusted" type="checkbox" checked> My device (always allowed to control)</label>
+            <button id="addNative">Add</button>
+        </div>
+
+        <h2>Connected</h2>
+        <p id="viewers"></p>
+    </section>
+</main>
+<script type="module" src="/web/host.js"></script>
+</body>
+</html>
