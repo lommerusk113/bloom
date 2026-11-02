@@ -9,7 +9,7 @@ const roomId = location.pathname.split('/')[2]
 const prefs = { audio: null, subs: null, bitrate: null } // per viewer; audio/subs reset per item
 
 let socket = null
-let cast = null       // set up in Task 9
+let cast = null
 let state = null      // last 'state' message
 let isHost = false
 let current = null    // { itemId, source } of the loaded stream; source null while loading
