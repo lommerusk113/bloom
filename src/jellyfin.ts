@@ -42,7 +42,7 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
         if (user) {
             query.set('userId', user)
         }
-        return json<{ Items: JfItem[] }>(`/Items?${query}`)
+        return json<{ Items: JfItem[]; TotalRecordCount?: number }>(`/Items?${query}`)
     }
 
     return {
@@ -66,18 +66,26 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
         redact: (text: string): string => text.replaceAll(apiKey, ''),
         systemInfo: () => json<{ ServerName: string; Version: string }>('/System/Info'),
 
-        async search(term: string): Promise<Array<{ id: string; name: string; type: string }>> {
-            const query = new URLSearchParams({ searchTerm: term, IncludeItemTypes: 'Movie,Series,Season,Episode', Recursive: 'true', Limit: '25' })
+        async search(term: string): Promise<Card[]> {
+            const query = new URLSearchParams({ searchTerm: term, IncludeItemTypes: 'Movie,Series,Episode', Recursive: 'true', Limit: '40' })
+            return (await listItems(query)).Items.map(card)
+        },
+
+        /** One page of all movies or all shows, A–Z. */
+        async library(type: 'Movie' | 'Series', start: number): Promise<{ items: Card[]; total: number }> {
+            const query = new URLSearchParams({ IncludeItemTypes: type, Recursive: 'true', SortBy: 'SortName', Limit: String(PAGE), StartIndex: String(start) })
             const res = await listItems(query)
-            return res.Items.map(i => ({ id: i.Id, name: label(i), type: i.Type }))
+            return { items: res.Items.map(card), total: res.TotalRecordCount ?? res.Items.length }
         },
 
         /** Seasons of a series, or episodes of a season, in order. */
-        async children(id: string): Promise<Array<{ id: string; name: string; type: string }>> {
+        async children(id: string): Promise<Card[]> {
             const query = new URLSearchParams({ ParentId: id, IncludeItemTypes: 'Season,Episode', IsMissing: 'false', ExcludeLocationTypes: 'Virtual', SortBy: 'ParentIndexNumber,IndexNumber,SortName' })
-            const res = await listItems(query)
-            return res.Items.map(i => ({ id: i.Id, name: label(i), type: i.Type }))
+            return (await listItems(query)).Items.map(card)
         },
+
+        /** The item's poster (or episode thumbnail), resized by Jellyfin. */
+        image: (id: string) => raw(`/Items/${encodeURIComponent(id)}/Images/Primary?fillWidth=320&quality=80`),
 
         /** Resolves a movie/episode to itself and a series/season to its episodes in order. */
         async queueItems(id: string): Promise<QueueItem[]> {
@@ -95,6 +103,19 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
         },
 
     }
+}
+
+const PAGE = 60
+
+/** What the host's catalogue shows: title, a line below it, and the full label used in the queue. */
+export type Card = { id: string; name: string; type: string; title: string; subtitle: string }
+
+function card(i: JfItem): Card {
+    const pad = (n?: number) => String(n ?? 0).padStart(2, '0')
+    const subtitle = i.Type === 'Episode' ? `${i.SeriesName ?? ''} · S${pad(i.ParentIndexNumber)}E${pad(i.IndexNumber)}`
+        : i.Type === 'Season' ? (i.SeriesName ?? '')
+        : String(i.ProductionYear ?? '')
+    return { id: i.Id, name: label(i), type: i.Type, title: i.Name, subtitle }
 }
 
 function label(i: JfItem): string {

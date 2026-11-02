@@ -38,21 +38,28 @@
         <p id="status" class="banner" hidden></p>
 
         <div class="panel">
-            <h2><span class="step">1</span> Invite people</h2>
-            <p class="muted">Anyone with this link can join, no Jellyfin account needed.</p>
+            <h2><span class="step">1</span> Pick something to watch</h2>
             <div class="row">
-                <input id="link" readonly aria-label="Guest link">
-                <button id="copy">Copy link</button>
-                <a id="open" class="button" target="_blank" rel="noopener">Open player ↗</a>
+                <div class="tabs" role="tablist">
+                    <button id="tabMovies" role="tab">Movies</button>
+                    <button id="tabShows" role="tab">Shows</button>
+                </div>
+                <form id="searchForm" class="row grow">
+                    <input id="q" type="search" placeholder="Search movies, shows and episodes" required>
+                    <button>Search</button>
+                </form>
             </div>
-            <label class="check"><input id="guestControl" type="checkbox"> Guests may pause, seek and skip</label>
+            <div id="crumbs" class="crumbs" hidden></div>
+            <div id="catalogue" class="catalogue"></div>
+            <p id="catalogueNote" class="empty" hidden></p>
+            <button id="more" class="more" hidden>Load more</button>
         </div>
 
         <div class="panel">
-            <h2><span class="step">2</span> Now playing</h2>
+            <h2><span class="step">2</span> Queue</h2>
             <div id="nowPlaying" class="now">
                 <div>
-                    <div id="nowTitle" class="now-title">Nothing yet — add something below</div>
+                    <div id="nowTitle" class="now-title">Nothing yet — pick something above</div>
                     <div id="nowTime" class="muted"></div>
                 </div>
                 <div class="row">
@@ -60,19 +67,19 @@
                     <button id="next" disabled>Next ⏭</button>
                 </div>
             </div>
-            <h3>Up next</h3>
             <ol id="queue" class="list"></ol>
             <p id="emptyQueue" class="empty">The queue is empty.</p>
         </div>
 
         <div class="panel">
-            <h2><span class="step">3</span> Add to the queue</h2>
-            <form id="searchForm" class="row">
-                <input id="q" type="search" placeholder="Search movies and shows" required>
-                <button>Search</button>
-            </form>
-            <div id="crumbs" class="crumbs" hidden></div>
-            <ul id="results" class="list"></ul>
+            <h2><span class="step">3</span> Invite people</h2>
+            <p class="muted">Anyone with this link can join, no Jellyfin account needed.</p>
+            <div class="row">
+                <input id="link" readonly aria-label="Guest link">
+                <button id="copy">Copy link</button>
+                <a id="open" class="button" target="_blank" rel="noopener">Open player ↗</a>
+            </div>
+            <label class="check"><input id="guestControl" type="checkbox"> Guests may pause, seek and skip</label>
         </div>
 
         <div class="panel">

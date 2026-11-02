@@ -38,6 +38,20 @@ test('resolveUser picks the first administrator and passes it on', async (t) => 
     assert.equal(query.get('ParentId'), 's1')
 })
 
+test('library pages through one item type and labels cards', async (t) => {
+    const urls: string[] = []
+    t.mock.method(globalThis, 'fetch', async (url: string) => {
+        urls.push(url)
+        return Response.json({ Items: [{ Id: 'e', Name: 'Pilot', Type: 'Episode', SeriesName: 'Show', ParentIndexNumber: 1, IndexNumber: 2 }], TotalRecordCount: 61 })
+    })
+    const page = await createJellyfin('http://jf', 'key', 'u1').library('Series', 60)
+    const query = new URL(urls[0]).searchParams
+    assert.equal(query.get('IncludeItemTypes'), 'Series')
+    assert.equal(query.get('StartIndex'), '60')
+    assert.equal(page.total, 61)
+    assert.deepEqual(page.items[0], { id: 'e', name: 'Show S01E02 – Pilot', type: 'Episode', title: 'Pilot', subtitle: 'Show · S01E02' })
+})
+
 test('redact removes the api key from text', () => {
     assert.equal(createJellyfin('http://jf', 'k3y').redact('a?api_key=k3y&b=k3y'), 'a?api_key=&b=')
 })

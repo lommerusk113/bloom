@@ -184,6 +184,24 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (method === 'GET' && path === '/api/search') {
         return sendJson(res, 200, await jf.search(url.searchParams.get('q') ?? ''))
     }
+    if (method === 'GET' && path === '/api/library') {
+        const type = url.searchParams.get('type') === 'Series' ? 'Series' : 'Movie'
+        return sendJson(res, 200, await jf.library(type, Math.max(0, Number(url.searchParams.get('start')) || 0)))
+    }
+    if (method === 'GET' && path === '/api/image') {
+        const id = url.searchParams.get('id') ?? ''
+        if (!/^[0-9a-f-]{32,36}$/i.test(id)) {
+            return sendJson(res, 400, { error: 'Bad id' })
+        }
+        const image = await jf.image(id)
+        if (!image.ok || !image.body) {
+            res.writeHead(404).end()
+            return
+        }
+        res.writeHead(200, { 'content-type': image.headers.get('content-type') ?? 'image/jpeg', 'cache-control': 'private, max-age=86400' })
+        res.end(Buffer.from(await image.arrayBuffer()))
+        return
+    }
     if (method === 'GET' && path === '/api/children') {
         return sendJson(res, 200, await jf.children(url.searchParams.get('id') ?? ''))
     }

@@ -70,3 +70,24 @@ video { width: 100%; max-height: 80vh; display: block; }
 #seek { flex: 1; min-width: 140px; padding: 0; accent-color: var(--accent); }
 #time { font-variant-numeric: tabular-nums; color: var(--muted); }
 google-cast-launcher { display: inline-block; width: 28px; height: 28px; cursor: pointer; --connected-color: var(--accent); --disconnected-color: var(--text); }
+
+.tabs { display: flex; gap: 4px; padding: 3px; background: var(--raised); border-radius: 10px; }
+.tabs button { border: none; background: none; padding: 6px 14px; }
+.tabs button.active { background: var(--accent); color: var(--accent-text); }
+.crumbs .push { margin-left: auto; }
+.catalogue { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 14px; margin-top: 14px; }
+.tile { display: flex; flex-direction: column; gap: 4px; padding: 0; background: none; border: none; text-align: left; white-space: normal; }
+.tile.wide { grid-column: span 2; }
+.tile .art { position: relative; aspect-ratio: 2 / 3; border-radius: 10px; overflow: hidden; background: var(--raised); border: 2px solid transparent; transition: border-color .15s, transform .15s; }
+.tile.wide .art { aspect-ratio: 16 / 9; }
+.tile:hover .art, .tile:focus-visible .art { border-color: var(--accent); transform: translateY(-2px); }
+.tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tile .placeholder { position: absolute; inset: 0; display: grid; place-items: center; padding: 10px; text-align: center; color: var(--muted); font-weight: 600; }
+.tile .badge { position: absolute; right: 6px; bottom: 6px; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-text); font-weight: 700; opacity: 0; transition: opacity .15s; }
+.tile:hover .badge, .tile:focus-visible .badge, .tile.added .badge { opacity: 1; }
+.tile.added .badge { background: var(--ok); }
+.tile-title { font-weight: 600; font-size: .92em; line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tile-sub { font-size: .8em; color: var(--muted); }
+.tile:hover, .tile:hover:not(:disabled) { border: none; }
+.more { display: block; margin: 14px auto 0; }
+@media (max-width: 480px) { .catalogue { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); } .tile.wide { grid-column: span 2; } }

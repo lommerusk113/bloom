@@ -140,58 +140,116 @@ function manage() {
     $('toggle').onclick = () => command({ type: state.room.playing ? 'pause' : 'play' })
     $('next').onclick = () => command({ type: 'next' })
     $('guestControl').onchange = () => command({ type: 'setGuestControl', value: $('guestControl').checked })
+    const list = (path) => async () => {
+        const items = await api(path)
+        return { items, total: items.length }
+    }
+    const tab = (type, label) => () => {
+        $('tabMovies').classList.toggle('active', type === 'Movie')
+        $('tabShows').classList.toggle('active', type === 'Series')
+        browse([{ label, load: start => api(`/api/library?type=${type}&start=${start}`) }])
+    }
+    $('tabMovies').onclick = tab('Movie', 'Movies')
+    $('tabShows').onclick = tab('Series', 'Shows')
     $('searchForm').onsubmit = (event) => {
         event.preventDefault()
         const term = $('q').value
-        browse([{ label: `Results for “${term}”`, load: () => api(`/api/search?q=${encodeURIComponent(term)}`) }])
+        $('tabMovies').classList.remove('active')
+        $('tabShows').classList.remove('active')
+        browse([{ label: `Results for “${term}”`, load: list(`/api/search?q=${encodeURIComponent(term)}`) }])
     }
+    $('tabMovies').click()
     setInterval(renderTime, 1000)
 }
 
-const KIND = { Movie: 'Movie', Series: 'Show', Season: 'Season', Episode: 'Episode' }
+const addItem = (id) => socket.send({ type: 'addItem', itemId: id })
 
-/** Shows the last level of a search → show → season trail; crumbs go back up. */
 let browseToken = 0
 
+/**
+ * Shows the last level of a trail (Movies/Shows/search → show → season) as poster cards; crumbs go back up.
+ * level.load(start) resolves to { items, total }; level.addAll is the show or season id the level lists.
+ */
 async function browse(trail) {
-    const token = ++browseToken // a slower earlier search must not overwrite this one
+    const token = ++browseToken // a slower earlier load must not overwrite this one
     const level = trail.at(-1)
     $('crumbs').hidden = trail.length < 2
     $('crumbs').replaceChildren(...trail.flatMap((step, i) => {
-        const crumb = i === trail.length - 1 ? el('span', '', step.label) : button(step.label, () => browse(trail.slice(0, i + 1)), { className: 'link' })
+        const crumb = i === trail.length - 1 ? el('strong', '', step.label) : button(step.label, () => browse(trail.slice(0, i + 1)), { className: 'link' })
         return i ? [el('span', 'muted', ' › '), crumb] : [crumb]
-    }))
-    $('results').replaceChildren(li('Loading…'))
+    }), ...(level.addAll ? [button(level.addLabel, (e) => {
+        addItem(level.addAll)
+        e.target.textContent = '✓ Added'
+    }, { className: 'primary push' })] : []))
+    $('catalogue').replaceChildren()
+    $('more').hidden = true
+    note('Loading…')
+    await loadPage(trail, level, 0, token)
+}
+
+function note(text) {
+    $('catalogueNote').textContent = text
+    $('catalogueNote').hidden = !text
+}
+
+async function loadPage(trail, level, start, token) {
     try {
-        const items = await level.load()
+        const { items, total } = await level.load(start)
         if (token !== browseToken) {
             return
         }
-        if (items.length === 0) {
-            $('results').replaceChildren(li('Nothing found'))
-            return
+        note(start === 0 && items.length === 0 ? 'Nothing found' : '')
+        $('catalogue').append(...items.map(i => card(trail, i)))
+        const shown = start + items.length
+        $('more').hidden = shown >= total || items.length === 0
+        $('more').onclick = () => {
+            $('more').hidden = true
+            loadPage(trail, level, shown, token)
         }
-        $('results').replaceChildren(...items.map((i) => {
-            const add = () => {
-                socket.send({ type: 'addItem', itemId: i.id })
-                showStatus(`Added ${i.name}`, false)
-            }
-            const container = i.type === 'Series' || i.type === 'Season'
-            const open = () => browse([...trail, { label: i.name, load: () => api(`/api/children?id=${encodeURIComponent(i.id)}`) }])
-            const row = li(i.name, el('span', 'tag', KIND[i.type] ?? i.type))
-            if (container) {
-                row.append(button(i.type === 'Series' ? 'Seasons ›' : 'Episodes ›', open, { className: 'primary' }), button('Add all', add))
-            } else {
-                row.append(button('Add', add, { className: 'primary' }))
-            }
-            return row
-        }))
     } catch (err) {
-        if (token !== browseToken) {
+        if (token === browseToken) {
+            note(`Failed: ${err.message}`)
+        }
+    }
+}
+
+function card(trail, i) {
+    const container = i.type === 'Series' || i.type === 'Season'
+    const tile = el('button', `tile${i.type === 'Episode' ? ' wide' : ''}`)
+    tile.title = container ? `Open ${i.name}` : `Add ${i.name} to the queue`
+
+    const art = el('div', 'art')
+    const img = el('img')
+    img.loading = 'lazy'
+    img.alt = ''
+    img.src = `/api/image?id=${encodeURIComponent(i.id)}`
+    img.onerror = () => {
+        img.remove()
+        art.append(el('span', 'placeholder', i.title))
+    }
+    const badge = el('span', 'badge', container ? '›' : '+')
+    art.append(img, badge)
+    tile.append(art, el('span', 'tile-title', i.title), el('span', 'tile-sub', i.subtitle))
+
+    tile.onclick = () => {
+        if (container) {
+            const isShow = i.type === 'Series'
+            browse([...trail, {
+                label: i.title,
+                load: async () => {
+                    const items = await api(`/api/children?id=${encodeURIComponent(i.id)}`)
+                    return { items, total: items.length }
+                },
+                addAll: i.id,
+                addLabel: isShow ? '+ Add whole show' : '+ Add whole season',
+            }])
             return
         }
-        $('results').replaceChildren(li(`Failed: ${err.message}`))
+        addItem(i.id)
+        badge.textContent = '✓'
+        tile.classList.add('added')
     }
+    return tile
 }
 
 function renderTime() {
