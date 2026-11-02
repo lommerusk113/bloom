@@ -34,6 +34,27 @@ async function serve(room: Room, jf: Jellyfin) {
     return { base, close: () => { server.closeAllConnections(); server.close() } }
 }
 
+/** A Jellyfin that hands out PlaySessionId p<n> per PlaybackInfo and answers everything else with a playlist. */
+function fakeJellyfin(calls: Array<[string, RequestInit]> = [], extra = {}) {
+    let n = 0
+    return {
+        ...extra,
+        raw: async (path: string, init: RequestInit) => {
+            calls.push([path, init])
+            if (path.includes('/PlaybackInfo')) {
+                n++
+                return Response.json({ MediaSources: [{ Id: 'm', TranscodingUrl: `/videos/x/master.m3u8?PlaySessionId=p${n}` }] })
+            }
+            if (init.method === 'DELETE') {
+                return new Response(null, { status: 204 })
+            }
+            return new Response('#EXTM3U\nmain.m3u8?api_key=SECRET&x=1\n', { headers: { 'content-type': 'application/vnd.apple.mpegurl' } })
+        },
+    } as unknown as Jellyfin
+}
+
+const playbackInfo = (base: string) => fetch(`${base}/Items/${ITEM}/PlaybackInfo`, { method: 'POST', body: '{}' })
+
 test('proxy rejects items outside the queue', async () => {
     const jf = { raw: async () => { throw new Error('must not be called') } } as unknown as Jellyfin
     const { base, close } = await serve(createRoom('r', 0), jf)
@@ -45,20 +66,15 @@ test('proxy rejects items outside the queue', async () => {
 test('proxy forwards queued items, strips keys and adds CORS', async () => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
-    const calls: Array<[string, Headers]> = []
-    const jf = {
-        raw: async (path: string, init: RequestInit) => {
-            calls.push([path, new Headers(init.headers)])
-            return new Response('#EXTM3U\nmain.m3u8?api_key=SECRET&x=1\n', { headers: { 'content-type': 'application/vnd.apple.mpegurl' } })
-        },
-    } as unknown as Jellyfin
-    const { base, close } = await serve(room, jf)
-    const res = await fetch(`${base}/Videos/${ITEM}/master.m3u8?DeviceId=d1`)
+    const calls: Array<[string, RequestInit]> = []
+    const { base, close } = await serve(room, fakeJellyfin(calls))
+    await playbackInfo(base)
+    const res = await fetch(`${base}/Videos/${ITEM}/master.m3u8?DeviceId=d1&PlaySessionId=p1`)
     assert.equal(res.status, 200)
     assert.equal(res.headers.get('access-control-allow-origin'), '*')
     assert.equal(await res.text(), '#EXTM3U\nmain.m3u8?x=1\n')
-    assert.equal(calls[0][0], `/Videos/${ITEM}/master.m3u8?DeviceId=d1`)
-    assert.equal(calls[0][1].get('accept-encoding'), 'identity')
+    assert.equal(calls[1][0], `/Videos/${ITEM}/master.m3u8?DeviceId=d1&PlaySessionId=p1`)
+    assert.equal(new Headers(calls[1][1].headers).get('accept-encoding'), 'identity')
     close()
 })
 
@@ -93,16 +109,54 @@ test('proxy returns 502 for non-JSON PlaybackInfo on success', async () => {
 test('proxy overwrites UserId when the server runs as a user', async () => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
-    const paths: string[] = []
-    const jf = {
-        userId: 'me',
-        raw: async (path: string) => {
-            paths.push(path)
-            return new Response('#EXTM3U\n')
-        },
-    } as unknown as Jellyfin
-    const { base, close } = await serve(room, jf)
-    await fetch(`${base}/Videos/${ITEM}/master.m3u8?userid=evil&a=1`)
-    assert.equal(paths[0], `/Videos/${ITEM}/master.m3u8?a=1&UserId=me`)
+    const calls: Array<[string, RequestInit]> = []
+    const { base, close } = await serve(room, fakeJellyfin(calls, { userId: 'me' }))
+    await fetch(`${base}/Items/${ITEM}/PlaybackInfo?userid=evil&a=1`, { method: 'POST', body: '{}' })
+    assert.equal(calls[0][0], `/Items/${ITEM}/PlaybackInfo?a=1&UserId=me`)
+    close()
+})
+
+test('proxy only serves HLS for play sessions started in the room', async () => {
+    const room = createRoom('r', 0)
+    room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
+    const calls: Array<[string, RequestInit]> = []
+    const { base, close } = await serve(room, fakeJellyfin(calls))
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/master.m3u8`)).status, 403)
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p1`)).status, 403)
+    await playbackInfo(base)
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?playsessionid=p1`)).status, 200)
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/hls1/main/0.mp4?PlaySessionId=p1`)).status, 200)
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/hls1/main/0.mp4?PlaySessionId=p2`)).status, 403)
+    close()
+})
+
+test('proxy stops only the room\'s transcodes, once', async () => {
+    const room = createRoom('r', 0)
+    room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
+    const calls: Array<[string, RequestInit]> = []
+    const { base, close } = await serve(room, fakeJellyfin(calls))
+    const stop = () => fetch(`${base}/Videos/ActiveEncodings?DeviceId=d&PlaySessionId=p1`, { method: 'DELETE' })
+    assert.equal((await stop()).status, 403)
+    await playbackInfo(base)
+    assert.equal((await stop()).status, 204)
+    assert.equal(calls[1][0], '/Videos/ActiveEncodings?DeviceId=d&PlaySessionId=p1')
+    assert.equal(calls[1][1].method, 'DELETE')
+    assert.equal((await stop()).status, 403)
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/master.m3u8?PlaySessionId=p1`)).status, 403)
+    close()
+})
+
+test('proxy caps play sessions per room', async () => {
+    const room = createRoom('r', 0)
+    room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
+    const calls: Array<[string, RequestInit]> = []
+    const { base, close } = await serve(room, fakeJellyfin(calls))
+    for (let i = 0; i < 24; i++) {
+        assert.equal((await playbackInfo(base)).status, 200)
+    }
+    const res = await playbackInfo(base)
+    assert.equal(res.status, 429)
+    assert.deepEqual(await res.json(), { error: 'Too many active streams in this room' })
+    assert.equal(calls.length, 24)
     close()
 })

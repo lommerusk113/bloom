@@ -14,6 +14,21 @@ const ALLOWED: ReadonlyArray<[string, RegExp]> = [
 ]
 const PASSED_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control']
 const MAX_BODY = 1_000_000
+const MAX_SESSIONS = 24
+const HLS = /\.m3u8$|\/hls1\//i
+const STOP = /^\/Videos\/ActiveEncodings$/i
+
+/** PlaySessionIds of the transcodes started through each room; HLS and stop requests must name one. */
+const sessions = new WeakMap<Room, Set<string>>()
+
+function playSessionId(params: URLSearchParams): string | undefined {
+    for (const [name, value] of params) {
+        if (name.toLowerCase() === 'playsessionid') {
+            return value
+        }
+    }
+    return undefined
+}
 
 /** The normalized item id an allowed path refers to, or null when the path is not allowed. */
 export function allowedItemId(method: string, path: string): string | null {
@@ -30,9 +45,15 @@ export function stripApiKeys(playlist: string): string {
     return playlist.replace(/([?&])(?:api_key|apikey)=[^&\s"]*(&?)/gi, (_, sep: string, amp: string) => (amp ? sep : ''))
 }
 
-/** Removes the api key query params from each MediaSource.TranscodingUrl and drops the filesystem Path. */
-export function sanitizePlaybackInfo(body: string): string {
+/**
+ * Removes the api key query params from each MediaSource.TranscodingUrl and drops the filesystem Path.
+ * Adds the PlaySessionIds it finds to playSessions.
+ */
+export function sanitizePlaybackInfo(body: string, playSessions = new Set<string>()): string {
     const info = JSON.parse(body)
+    if (typeof info?.PlaySessionId === 'string') {
+        playSessions.add(info.PlaySessionId)
+    }
     for (const source of info?.MediaSources ?? []) {
         delete source.Path
         if (typeof source.TranscodingUrl === 'string') {
@@ -43,6 +64,10 @@ export function sanitizePlaybackInfo(body: string): string {
                 }
             }
             source.TranscodingUrl = url.pathname + url.search
+            const id = playSessionId(url.searchParams)
+            if (id) {
+                playSessions.add(id)
+            }
         }
     }
     return JSON.stringify(info)
@@ -61,7 +86,7 @@ export async function readBody(req: IncomingMessage): Promise<string> {
 
 /**
  * Forwards a guest request to Jellyfin with the server's API key.
- * Only streaming paths for items in the room's queue are allowed.
+ * Only streaming paths for items in the room's queue are allowed, HLS only for transcodes started in this room.
  */
 // ponytail: query strings pass through untouched, so a guest who already knows another item's
 // MediaSourceId could request it. Ids are unguessable GUIDs and are never listed to guests.
@@ -69,9 +94,23 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
 
     const url = new URL(target, 'http://proxy')
     const method = req.method ?? 'GET'
-    const itemId = allowedItemId(method, url.pathname)
-    if (!itemId || !room.queue.some(item => normalizeId(item.id) === itemId)) {
-        res.writeHead(404).end()
+    const playSessions = sessions.get(room) ?? new Set<string>()
+    sessions.set(room, playSessions)
+    const id = playSessionId(url.searchParams)
+    const stop = method === 'DELETE' && STOP.test(url.pathname)
+    if (!stop) {
+        const itemId = allowedItemId(method, url.pathname)
+        if (!itemId || !room.queue.some(item => normalizeId(item.id) === itemId)) {
+            res.writeHead(404).end()
+            return
+        }
+    }
+    if ((stop || HLS.test(url.pathname)) && !(id && playSessions.has(id))) {
+        res.writeHead(403).end()
+        return
+    }
+    if (/\/PlaybackInfo$/i.test(url.pathname) && playSessions.size >= MAX_SESSIONS) {
+        res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Too many active streams in this room' }))
         return
     }
 
@@ -99,6 +138,9 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
         body: method === 'POST' ? await readBody(req) : undefined,
         signal: abort.signal,
     })
+    if (stop) {
+        playSessions.delete(id!)
+    }
 
     const out: Record<string, string> = { 'access-control-allow-origin': '*' }
     for (const name of PASSED_HEADERS) {
@@ -118,7 +160,7 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
         const text = await upstream.text()
         delete out['content-length']
         try {
-            const clean = sanitizePlaybackInfo(text)
+            const clean = sanitizePlaybackInfo(text, playSessions)
             res.writeHead(upstream.status, out).end(clean)
         } catch {
             const ok = upstream.status >= 200 && upstream.status < 300
