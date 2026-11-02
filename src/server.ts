@@ -16,6 +16,9 @@ const alive = new WeakSet<WebSocket>()
 
 const MAX_MESSAGES_PER_SECOND = 20
 const MAX_STRIKES = 5
+const MAX_CLIENTS_PER_ROOM = 50
+/** A client this far behind on reading is dropped rather than buffering every state for it. */
+const MAX_BUFFERED_BYTES = 1_000_000
 const WEB_DIR = join(import.meta.dirname, '..', 'web')
 const HLS_JS = join(import.meta.dirname, '..', 'node_modules', 'hls.js', 'dist', 'hls.min.js')
 const CONTENT_TYPES: Record<string, string> = {
@@ -56,9 +59,14 @@ function stateMessage(room: Room, isHost: boolean): string {
 function broadcast(room: Room): void {
     const messages = { host: stateMessage(room, true), guest: stateMessage(room, false) }
     for (const client of clients.get(room.id) ?? []) {
-        if (client.ws.readyState === WebSocket.OPEN) {
-            client.ws.send(client.isHost ? messages.host : messages.guest)
+        if (client.ws.readyState !== WebSocket.OPEN) {
+            continue
         }
+        if (client.ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+            client.ws.terminate()
+            continue
+        }
+        client.ws.send(client.isHost ? messages.host : messages.guest)
     }
 }
 
@@ -182,7 +190,7 @@ server.on('upgrade', (req, socket, head) => {
         const origin = req.headers.origin
         // a reverse proxy may rewrite Host, so PUBLIC_URL's host counts as same-site too
         const originHost = origin === undefined ? undefined : URL.parse(origin)?.host
-        if (!room || (origin !== undefined && originHost !== req.headers.host && originHost !== PUBLIC_HOST)) {
+        if (!room || (origin !== undefined && originHost !== req.headers.host && originHost !== PUBLIC_HOST) || (clients.get(room.id)?.size ?? 0) >= MAX_CLIENTS_PER_ROOM) {
             socket.destroy()
             return
         }
@@ -262,9 +270,14 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
 
     const now = Date.now()
     switch (msg.type) {
-        case 'hello':
-            client.name = String(msg.name ?? '').trim().slice(0, 32) || 'Guest'
+        case 'hello': {
+            const name = String(msg.name ?? '').trim().slice(0, 32) || 'Guest'
+            if (name === client.name) {
+                return
+            }
+            client.name = name
             break
+        }
         case 'ping':
             client.ws.send(JSON.stringify({ type: 'pong', t0: msg.t0, server: now }))
             return

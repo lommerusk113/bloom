@@ -156,3 +156,13 @@ test('websocket messages beyond the rate limit are dropped', async () => {
     assert.equal((await fetch(`${BASE}/api/health`)).status, 200)
     guest.close()
 })
+
+test('a room accepts at most 50 sockets', async () => {
+    const cookie = await login()
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
+    const sockets = Array.from({ length: 50 }, () => new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`))
+    await Promise.all(sockets.map(ws => once(ws, 'open')))
+    const extra = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`)
+    await assert.rejects(once(extra, 'open'))
+    sockets.forEach(ws => ws.terminate())
+})
