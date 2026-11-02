@@ -255,10 +255,16 @@ function fillPickers() {
 }
 
 $('audio').onchange = () => {
+    if (!current) {
+        return // stream unloaded (empty queue or room gone)
+    }
     prefs.audio = Number($('audio').value)
     load(current.itemId)
 }
 $('subs').onchange = () => {
+    if (!current) {
+        return
+    }
     const previous = prefs.subs
     prefs.subs = Number($('subs').value)
     const source = current.source ?? current.last
@@ -270,7 +276,9 @@ $('subs').onchange = () => {
 }
 $('quality').onchange = () => {
     prefs.bitrate = Number($('quality').value) || null
-    load(current.itemId)
+    if (current) {
+        load(current.itemId)
+    }
 }
 
 // --- controls ---
