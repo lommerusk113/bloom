@@ -93,8 +93,21 @@ export function setupCast({ roomId, deviceId, getState }) {
         await cast.framework.CastContext.getInstance().getCurrentSession().loadMedia(request)
     }
 
+    function stop() {
+        if (!player) {
+            return // the Cast SDK never initialized: nothing to stop
+        }
+        cast.framework.CastContext.getInstance().getCurrentSession()?.getMediaSession()
+            ?.stop(new chrome.cast.media.StopRequest(), () => {}, console.error)
+        stopTranscode()
+        loadedItem = null
+        loadToken++
+        loading = false
+    }
+
     return {
         active: () => Boolean(player?.isConnected),
+        stop,
 
         /** Called every second by the player while casting. Seeks only: the Default Receiver has no playback rate. */
         sync(target) {
@@ -103,12 +116,7 @@ export function setupCast({ roomId, deviceId, getState }) {
             if (!item) {
                 // queue emptied: stop the receiver and its transcode, drop any in-flight load
                 if (loadedItem) {
-                    cast.framework.CastContext.getInstance().getCurrentSession()?.getMediaSession()
-                        ?.stop(new chrome.cast.media.StopRequest(), () => {}, console.error)
-                    stopTranscode()
-                    loadedItem = null
-                    loadToken++
-                    loading = false
+                    stop()
                 }
                 return
             }

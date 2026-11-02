@@ -67,7 +67,12 @@ function onMessage(msg) {
         return
     }
     if (msg.type === 'gone') {
+        state = null // syncNow stops driving the player and Chromecast
+        cast?.stop()
         unloadStream()
+        for (const id of ['toggle', 'seek', 'next']) {
+            $(id).disabled = true // their handlers read state
+        }
         $('status').textContent = 'This room no longer exists'
         return
     }
