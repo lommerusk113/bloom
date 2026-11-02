@@ -146,6 +146,11 @@ addEventListener('pagehide', () => {
         stopStream(roomId, current.source.TranscodingUrl, deviceId)
     }
 })
+addEventListener('pageshow', (event) => {
+    if (event.persisted && current) {
+        load(current.itemId) // restored from the back/forward cache: pagehide stopped the stream
+    }
+})
 
 function attach(src) {
     hls?.destroy()
@@ -302,6 +307,11 @@ video.addEventListener('playing', () => {
     retry = { itemId: null, delay: 0 } // the stream works: the next failure starts the backoff over
 })
 video.addEventListener('canplay', () => { stalled = false })
+video.addEventListener('error', () => {
+    if (!hls && current?.source) {
+        retryLoad(++loadToken, current.itemId, 'Stream error') // native HLS: hls.js reports its own errors
+    }
+})
 video.addEventListener('seeked', () => { lastSeekedAt = Date.now() })
 
 function isBuffered(time) {
