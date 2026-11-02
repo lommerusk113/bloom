@@ -100,19 +100,14 @@ test('parseCommand accepts valid wire commands only', () => {
     assert.equal(parseCommand(null), null)
 })
 
-test('sweepRooms deletes rooms idle past the TTL unless a viewer or syncing native keeps them', () => {
+test('sweepRooms deletes rooms without viewers past the TTL', () => {
     const TTL = 30 * 60_000
-    const native = { sessionId: 's', label: 'TV', device: 'TV', trusted: false, status: 'out-of-sync' as const }
     const rooms = new Map<string, Room>()
     const lonely = roomWith()
     lonely.id = 'lonely'
-    lonely.nativeSessions.push({ ...native })
     const watched = roomWith()
     watched.id = 'watched'
-    const synced = roomWith()
-    synced.id = 'synced'
-    synced.nativeSessions.push({ ...native, status: 'syncing' })
-    for (const room of [lonely, watched, synced]) {
+    for (const room of [lonely, watched]) {
         rooms.set(room.id, room)
     }
     const emptySince = new Map<string, number>()
@@ -125,7 +120,7 @@ test('sweepRooms deletes rooms idle past the TTL unless a viewer or syncing nati
     viewers = 0
     assert.deepEqual(sweepRooms(rooms, viewerCount, emptySince, TTL + 1).deleted, ['lonely'])
     assert.deepEqual(sweepRooms(rooms, viewerCount, emptySince, 2 * TTL + 2).deleted, ['watched'])
-    assert.deepEqual([...rooms.keys()], ['synced'])
+    assert.deepEqual([...rooms.keys()], [])
 })
 
 test('sweepRooms reports rooms whose item ended', () => {
@@ -134,14 +129,4 @@ test('sweepRooms reports rooms whose item ended', () => {
     const { advanced } = sweepRooms(new Map([[room.id, room]]), () => 1, new Map(), 100_000)
     assert.deepEqual(advanced, [room])
     assert.equal(room.index, 1)
-})
-
-test('sweepRooms deletes an empty-queue room past the TTL even with a syncing native', () => {
-    const TTL = 30 * 60_000
-    const room = createRoom('r1', 0)
-    room.nativeSessions.push({ sessionId: 's', label: 'TV', device: 'TV', trusted: false, status: 'syncing' })
-    const rooms = new Map([[room.id, room]])
-    const emptySince = new Map<string, number>()
-    sweepRooms(rooms, () => 0, emptySince, 0)
-    assert.deepEqual(sweepRooms(rooms, () => 0, emptySince, TTL + 1).deleted, ['r1'])
 })

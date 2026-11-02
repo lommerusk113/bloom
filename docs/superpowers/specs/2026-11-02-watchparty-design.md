@@ -4,12 +4,13 @@ Date: 2026-11-02
 
 ## Goal
 
-Watch Jellyfin content together, in sync, across every device: desktop/mobile browsers, Chromecast/TVs, and official Jellyfin native apps.
+Watch Jellyfin content together, in sync, across every device: desktop/mobile browsers and Chromecast/TVs.
 Guests join via a link without a Jellyfin account.
 Replaces Jellyfin SyncPlay (poor client support) and Owncast/neko-rooms (double encoding overloaded the GPU).
 
 ## Non-goals (v1)
 
+* Driving native Jellyfin apps (built, then removed: the host only wants browser and Cast viewers).
 * Text/voice chat.
 * Shared single transcode for the whole room (add only if >4–5 viewers struggle).
 * Persistence across restarts.
@@ -26,9 +27,7 @@ Replaces Jellyfin SyncPlay (poor client support) and Owncast/neko-rooms (double 
 One Node.js/TypeScript service in a Docker container next to Jellyfin.
 
 ```
- guests (browser / Chromecast) ──ws + http──▶ watchparty ──http (API key)──▶ Jellyfin ◀── native apps
-                                                  │                              ▲
-                                                  └──── remote-control API ──────┘
+ guests (browser / Chromecast) ──ws + http──▶ watchparty ──http (API key)──▶ Jellyfin
 ```
 
 ### Units
@@ -39,7 +38,6 @@ One Node.js/TypeScript service in a Docker container next to Jellyfin.
 | `sync` (`web/sync.js`) | Pure function: given room state, server time, client position → `none` / `rate(x)` / `seek(p)`; used by the web player and Cast sender | nothing |
 | `jellyfin` | Thin client for the Jellyfin HTTP API (items, search, playback info, sessions, remote commands) | Jellyfin |
 | `proxy` | Forwards guest HLS/subtitle requests to Jellyfin, injecting the API key, restricted to the room's queue | `jellyfin`, `room` |
-| `conductor` | Keeps native Jellyfin sessions in sync via remote control, with its own thresholds | `jellyfin`, `room` |
 | `server` | HTTP + websocket wiring, host auth, static files | all of the above |
 | `web` | Static player + host UI (hls.js, Cast sender SDK) | `server` |
 
@@ -54,7 +52,6 @@ type Room = {
   position: number           // seconds, valid at `updatedAt`
   updatedAt: number          // server epoch ms
   guestControl: boolean      // host toggle
-  nativeSessions: NativeSession[]
 }
 ```
 
@@ -62,7 +59,7 @@ Current position = `position + (playing ? (now - updatedAt) / 1000 : 0)`.
 
 Room commands: `play`, `pause`, `seek(p)`, `next`, `jump(index)`, `queueAdd/Remove/Move` (host only), `setGuestControl` (host only).
 When `guestControl` is false, guest `play/pause/seek/next/jump` are rejected.
-The host can end a room (`DELETE /api/rooms/:id`, **End room** in the host UI): every socket closes with 4404, syncing native sessions are paused, and the room's recently used transcodes are stopped.
+The host can end a room (`DELETE /api/rooms/:id`, **End room** in the host UI): every socket closes with 4404 and the room's recently used transcodes are stopped.
 
 ## Playback & transcoding
 
@@ -115,7 +112,7 @@ Host-only endpoints (search library, add to queue) call `jellyfin` directly behi
 * Local buffering does **not** pause the room; client catches up after.
 * User actions (play/pause/seek/next) are sent as commands; UI reflects server-confirmed state.
 * Audio/subtitle/bitrate picker per viewer.
-* Host UI: password login, library search, queue editing, guest-control toggle, native session picker with per-session status, end room (also on the player page for the host).
+* Host UI: password login, library search, queue editing, guest-control toggle, season/episode browsing, end room (also on the player page for the host).
 
 ### Chromecast
 
@@ -124,26 +121,10 @@ Host-only endpoints (search library, add to queue) call `jellyfin` directly behi
 * While casting, the page drives the receiver via the Cast `RemotePlayerController` using the same `sync` decisions (seek only; Default Receiver has no playback rate control, so threshold is 2s).
 * Requires the service to be reachable over **HTTPS** with a valid certificate (reverse proxy in front).
 
-## Native conductor
-
-Host adds active Jellyfin sessions (from `GET /Sessions`, filtered to sessions with `SupportsRemoteControl`) to a room.
-
-* On add / item change: `POST /Sessions/{id}/Playing?playCommand=PlayNow&itemIds={item}&startPositionTicks={pos}`.
-* Polls `GET /Sessions` every 1s. Estimated native position = `PlayState.PositionTicks` + (elapsed since `LastPlaybackCheckIn` if not paused).
-* Native clients report progress infrequently (some every ~10s), so native sync uses a looser threshold: seek only if |drift| > 3s, at most once per 10s per session.
-* Pause state mismatch → `POST /Sessions/{id}/Playing/Pause` or `/Unpause`.
-* Change detection: if a native session's pause state or position jumps (>5s beyond estimate) without a conductor command in the last 5s, treat it as a user action → room command (if `guestControl` allows or the device is trusted; otherwise revert that session).
-  Falling behind by up to the time since the last expectation (+2s) counts as buffering, not a user seek.
-* Trusted devices (host ticks **My device**) bypass `guestControl`.
-* Wrong item playing → re-issue `PlayNow`.
-* Command not reflected after 3 attempts, or session missing from 5 consecutive polls → mark `out-of-sync` in host UI, stop commanding it; host can re-add.
-
-Expected native sync precision: ~3s (limited by client progress reporting). Web clients: ~0.3s.
-
 ## Queue
 
 * Host builds queue from library search (items, episodes, whole seasons).
-* When the room position reaches the item's runtime, the server advances `index`, sets position 0, playing true, broadcasts; conductor sends `PlayNow` to native sessions.
+* When the room position reaches the item's runtime, the server advances `index`, sets position 0, playing true, broadcasts.
   Clients send no `ended` message; past the last item the room stops at its end.
 * Removing the playing last item parks the room at the end of the previous item, paused.
 * Guests may `next`/`jump` only if `guestControl` is on.
@@ -154,8 +135,7 @@ Expected native sync precision: ~3s (limited by client progress reporting). Web 
 |---|---|
 | Web client buffers | Room continues; client catches up via rate/seek |
 | Web client disconnects | Auto-reconnect with backoff; resyncs to room state; a room that no longer exists closes the socket with 4404, the client stops reconnecting and shows "This room no longer exists" |
-| Room idle (no web clients, and an empty queue or no *syncing* native sessions) | Deleted after 30 min |
-| Native session ignores commands / goes offline | 3 ignored commands or 5 consecutive polls without the session → `out-of-sync`, flagged to host |
+| Room idle (no web clients) | Deleted after 30 min |
 | Jellyfin unreachable / bad API key | Startup check fails loudly in logs; host UI shows error; guests see "server unavailable" |
 | Proxy request for item not in queue | 404 |
 | Guest command while `guestControl` off | Rejected, client gets current state back |
@@ -164,7 +144,7 @@ Expected native sync precision: ~3s (limited by client progress reporting). Web 
 
 * `JELLYFIN_URL` — internal URL, e.g. `http://jellyfin:8096`
 * `JELLYFIN_API_KEY` — admin API key
-* `JELLYFIN_USER_ID` — optional; run as this Jellyfin user (needed when PlaybackInfo or remote control fails with only an API key; limits libraries to that user's)
+* `JELLYFIN_USER_ID` — optional; run as this Jellyfin user (default: the first administrator, since Jellyfin 10.11 rejects PlaybackInfo without a user; limits libraries to that user's)
 * `HOST_PASSWORD` — host login
 * `PUBLIC_URL` — external base URL; its host is accepted as the websocket Origin and `https://` enables the Secure cookie flag (links and Cast use the browser's `location.origin`)
 * `PORT` — default 8080
@@ -182,12 +162,11 @@ Expected native sync precision: ~3s (limited by client progress reporting). Web 
 
 ## Testing
 
-* Unit (`node:test`): `sync` decisions at threshold boundaries, `room` transitions (incl. permission rejects, queue advance, position math), native drift/user-action detection.
-* Integration: conductor against a stubbed Jellyfin client (command issued, retries, out-of-sync, user-action detection, seek lead). Proxy allowlist (item in/out of queue).
-* Manual: real Jellyfin with 2 desktop browsers, a phone, Chromecast, and one native app (Android TV or Jellyfin Media Player) in one room; verify sync, per-viewer subs/audio, queue advance, guest-control toggle.
+* Unit (`node:test`): `sync` decisions at threshold boundaries, `room` transitions (incl. permission rejects, queue advance, position math).
+* Integration: proxy allowlist (item in/out of queue).
+* Manual: real Jellyfin with 2 desktop browsers, a phone, and Chromecast in one room; verify sync, per-viewer subs/audio, queue advance, guest-control toggle.
 
 ## Risks
 
-* Native client progress-report frequency varies; some third-party clients don't support remote control — they simply can't be added.
 * Cast Default Receiver can't do smooth rate correction → occasional small seeks while casting.
 * Upload bandwidth: each remuxing guest pulls full source bitrate; mitigated by per-viewer max bitrate.

@@ -2,17 +2,6 @@ import type { QueueItem } from './room.ts'
 
 export const TICKS_PER_SECOND = 10_000_000
 
-export type JfSession = {
-    Id: string
-    DeviceName: string
-    Client: string
-    UserName?: string
-    SupportsRemoteControl: boolean
-    LastPlaybackCheckIn?: string
-    NowPlayingItem?: { Id: string; Name?: string }
-    PlayState?: { PositionTicks?: number; IsPaused?: boolean }
-}
-
 type JfItem = {
     Id: string
     Name: string
@@ -49,12 +38,6 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
         return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
     }
 
-    async function post(path: string): Promise<void> {
-        await json<void>(path, { method: 'POST' })
-    }
-
-    const session = (id: string) => `/Sessions/${encodeURIComponent(id)}/Playing`
-    const ticks = (seconds: number) => String(Math.round(seconds * TICKS_PER_SECOND))
     const listItems = (query: URLSearchParams) => {
         if (user) {
             query.set('userId', user)
@@ -111,12 +94,6 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
             return items.map(i => ({ id: i.Id, name: label(i), runtime: (i.RunTimeTicks ?? 0) / TICKS_PER_SECOND }))
         },
 
-        sessions: () => json<JfSession[]>('/Sessions'),
-        playNow: (sessionId: string, itemId: string, position: number) =>
-            post(`${session(sessionId)}?${new URLSearchParams({ playCommand: 'PlayNow', itemIds: itemId, startPositionTicks: ticks(position) })}`),
-        pause: (sessionId: string) => post(`${session(sessionId)}/Pause`),
-        unpause: (sessionId: string) => post(`${session(sessionId)}/Unpause`),
-        seek: (sessionId: string, position: number) => post(`${session(sessionId)}/Seek?seekPositionTicks=${ticks(position)}`),
     }
 }
 

@@ -4,7 +4,6 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join } from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createAuth } from './auth.ts'
-import { createConductor } from './conductor.ts'
 import { createJellyfin } from './jellyfin.ts'
 import { proxyRequest, readBody, stopRoomStreams } from './proxy.ts'
 import { apply, createRoom, parseCommand, sweepRooms, type Room } from './room.ts'
@@ -39,7 +38,6 @@ const clients = new Map<string, Set<Client>>()
 const emptySince = new Map<string, number>()
 const pendingBroadcasts = new Set<Room>()
 let flushTimer: NodeJS.Timeout | undefined
-const conductor = createConductor(jf, rooms, broadcast)
 let jellyfinError: string | null = 'Not checked yet'
 
 function required(name: string): string {
@@ -52,11 +50,9 @@ function required(name: string): string {
 
 // --- room state fan-out ---
 
-/** Guests see native players only by device and status, never Jellyfin session ids or usernames. */
-function stateMessage(room: Room, isHost: boolean): string {
+function stateMessage(room: Room): string {
     const viewers = [...(clients.get(room.id) ?? [])].map(c => c.name)
-    const visible = isHost ? room : { ...room, nativeSessions: room.nativeSessions.map(n => ({ label: n.device, status: n.status })) }
-    return JSON.stringify({ type: 'state', room: visible, viewers, serverNow: Date.now() })
+    return JSON.stringify({ type: 'state', room, viewers, serverNow: Date.now() })
 }
 
 /** Every websocket send goes through here so a client that stops reading is dropped, not buffered for. */
@@ -86,9 +82,9 @@ function flushBroadcasts(): void {
 }
 
 function sendState(room: Room): void {
-    const messages = { host: stateMessage(room, true), guest: stateMessage(room, false) }
+    const message = stateMessage(room)
     for (const client of clients.get(room.id) ?? []) {
-        send(client, client.isHost ? messages.host : messages.guest)
+        send(client, message)
     }
 }
 
@@ -191,10 +187,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (method === 'GET' && path === '/api/children') {
         return sendJson(res, 200, await jf.children(url.searchParams.get('id') ?? ''))
     }
-    if (method === 'GET' && path === '/api/sessions') {
-        const sessions = (await jf.sessions()).filter(s => s.SupportsRemoteControl)
-        return sendJson(res, 200, sessions.map(s => ({ id: s.Id, label: `${s.UserName ?? 'Unknown'} – ${s.DeviceName} (${s.Client})`, device: `${s.DeviceName} (${s.Client})` })))
-    }
 
     return sendJson(res, 404, { error: 'Not found' })
 }
@@ -212,19 +204,16 @@ const server = createServer((req, res) => {
     })
 })
 
-/** Host ends the room: everyone is disconnected as from a deleted room, native players pause, transcodes stop. */
+/** Host ends the room: everyone is disconnected as from a deleted room and its transcodes stop. */
 async function endRoom(room: Room): Promise<void> {
 
     rooms.delete(room.id)
     emptySince.delete(room.id)
-    conductor.forgetRoom(room.id)
     for (const client of clients.get(room.id) ?? []) {
         client.ws.close(4404, 'Room ended')
     }
     clients.delete(room.id)
-
-    const natives = room.nativeSessions.filter(n => n.status === 'syncing').map(n => jf.pause(n.sessionId))
-    await Promise.allSettled([...natives, stopRoomStreams(room, jf)])
+    await stopRoomStreams(room, jf)
 }
 
 // --- websockets ---
@@ -342,7 +331,7 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
         case 'cmd': {
             const cmd = parseCommand(msg.cmd)
             if (!cmd || !apply(room, cmd, client.isHost, now)) {
-                send(client, stateMessage(room, client.isHost)) // rejected: resync the sender
+                send(client, stateMessage(room)) // rejected: resync the sender
                 return
             }
             break
@@ -352,31 +341,6 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
                 return
             }
             apply(room, { type: 'queueAdd', items: await jf.queueItems(String(msg.itemId)) }, true, now)
-            break
-        case 'nativeAdd': {
-            if (!client.isHost) {
-                return
-            }
-            const sessionId = String(msg.sessionId)
-            const trusted = msg.trusted === true
-            const device = String(msg.device ?? 'Device').slice(0, 80)
-            const existing = room.nativeSessions.find(n => n.sessionId === sessionId)
-            if (existing) {
-                existing.status = 'syncing'
-                existing.trusted = trusted
-                existing.device = device
-            } else {
-                room.nativeSessions.push({ sessionId, label: String(msg.label ?? sessionId).slice(0, 80), device, trusted, status: 'syncing' })
-            }
-            conductor.reset(room.id, sessionId)
-            break
-        }
-        case 'nativeRemove':
-            if (!client.isHost) {
-                return
-            }
-            room.nativeSessions = room.nativeSessions.filter(n => n.sessionId !== msg.sessionId)
-            conductor.reset(room.id, String(msg.sessionId))
             break
         default:
             return
@@ -392,7 +356,6 @@ setInterval(() => {
     advanced.forEach(broadcast)
     for (const id of deleted) {
         clients.delete(id)
-        conductor.forgetRoom(id)
     }
 }, 1000)
 
@@ -405,10 +368,6 @@ setInterval(() => {
         ws.ping()
     }
 }, 30_000)
-
-setInterval(() => {
-    conductor.tick().catch((err: Error) => console.error('Conductor:', err.message))
-}, 1000)
 
 async function checkJellyfin(): Promise<void> {
     const before = jellyfinError

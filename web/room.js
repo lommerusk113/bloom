@@ -352,8 +352,7 @@ function render() {
         span.title = title
         return span
     }
-    $('viewers').replaceChildren(...viewers.map(v => chip(v)),
-        ...room.nativeSessions.map(n => chip(`📺 ${n.label}${n.status === 'out-of-sync' ? ' ⚠' : ''}`, n.status === 'out-of-sync' ? 'Out of sync' : 'Jellyfin app')))
+    $('viewers').replaceChildren(...viewers.map(v => chip(v)))
 }
 
 // --- sync ---

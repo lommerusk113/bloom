@@ -1,14 +1,5 @@
 export type QueueItem = { id: string; name: string; runtime: number }
 
-export type NativeSession = {
-    sessionId: string
-    label: string
-    /** Device name and client, the only part guests see. */
-    device: string
-    trusted: boolean
-    status: 'syncing' | 'out-of-sync'
-}
-
 export type Room = {
     id: string
     queue: QueueItem[]
@@ -17,7 +8,6 @@ export type Room = {
     position: number
     updatedAt: number
     guestControl: boolean
-    nativeSessions: NativeSession[]
 }
 
 export type Command =
@@ -35,7 +25,7 @@ const ROOM_TTL_MS = 30 * 60_000
 const HOST_ONLY: ReadonlySet<Command['type']> = new Set(['queueAdd', 'queueRemove', 'queueMove', 'setGuestControl'])
 
 export function createRoom(id: string, now: number): Room {
-    return { id, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true, nativeSessions: [] }
+    return { id, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true }
 }
 
 export function currentPosition(room: Room, now: number): number {
@@ -86,8 +76,7 @@ export function advanceIfEnded(room: Room, now: number): boolean {
 }
 
 /**
- * Advances rooms whose item ended and deletes rooms idle (no viewers, and an empty queue or no syncing native session)
- * for over 30 minutes.
+ * Advances rooms whose item ended and deletes rooms without viewers for over 30 minutes.
  * emptySince holds when each room became idle and is updated in place.
  */
 export function sweepRooms(
@@ -103,7 +92,7 @@ export function sweepRooms(
         if (advanceIfEnded(room, now)) {
             advanced.push(room)
         }
-        const idle = viewerCount(room.id) === 0 && (room.queue.length === 0 || !room.nativeSessions.some(n => n.status === 'syncing'))
+        const idle = viewerCount(room.id) === 0
         if (!idle) {
             emptySince.delete(room.id)
             continue
