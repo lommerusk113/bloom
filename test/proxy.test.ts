@@ -17,6 +17,7 @@ test('allowedItemId accepts streaming paths and rejects the rest', () => {
     assert.equal(allowedItemId('GET', `/Items/${ITEM}/PlaybackInfo`), null)
     assert.equal(allowedItemId('DELETE', `/Videos/${ITEM}/master.m3u8`), null)
     assert.equal(allowedItemId('GET', '/Users'), null)
+    assert.equal(allowedItemId('GET', `/Items/${ITEM}/Images/Primary`), null)
 })
 
 test('stripApiKeys removes keys from playlist urls', () => {

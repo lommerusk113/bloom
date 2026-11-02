@@ -10,7 +10,6 @@ const ALLOWED: ReadonlyArray<[string, RegExp]> = [
     ['GET', new RegExp(`^/Videos/${ID}/(master|main)\\.m3u8$`, 'i')],
     ['GET', new RegExp(`^/Videos/${ID}/hls1/[\\w-]+/-?\\d+\\.(ts|mp4|m4s)$`, 'i')],
     ['GET', new RegExp(`^/Videos/${ID}/${ID}/Subtitles/\\d+/(\\d+/)?Stream\\.vtt$`, 'i')],
-    ['GET', new RegExp(`^/Items/${ID}/Images/Primary$`, 'i')],
 ]
 const PASSED_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control']
 const MAX_BODY = 1_000_000
