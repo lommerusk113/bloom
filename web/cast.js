@@ -1,6 +1,6 @@
 // Chromecast via Google's Default Media Receiver. The sender SDK only exists in Chrome.
 import { adaptLead, decide, nextBackoff } from './sync.js'
-import { deviceProfile, playbackInfo, proxied, stopStream, subtitlePath, withDevice } from './playback.js'
+import { deviceProfile, playbackInfo, proxied, stopStream, subtitlePath } from './playback.js'
 
 const COOLDOWN_MS = 3000
 const SEEK_COOLDOWN_MS = 8000 // a seek can restart the transcode; give it time to land
@@ -52,7 +52,7 @@ export function setupCast({ roomId, deviceId, getState }) {
 
     function stopTranscode() {
         if (transcodingUrl) {
-            stopStream(roomId, transcodingUrl, castDevice)
+            stopStream(roomId, transcodingUrl)
             transcodingUrl = null
         }
     }
@@ -61,11 +61,11 @@ export function setupCast({ roomId, deviceId, getState }) {
         stopTranscode()
         const source = await playbackInfo(roomId, item.id, deviceProfile(null, true), { deviceId: castDevice })
         if (token !== loadToken) {
-            stopStream(roomId, source.TranscodingUrl, castDevice) // superseded: don't leak its transcode
+            stopStream(roomId, source.TranscodingUrl) // superseded: don't leak its transcode
             return
         }
         transcodingUrl = source.TranscodingUrl
-        const url = location.origin + proxied(roomId, withDevice(source.TranscodingUrl, castDevice))
+        const url = location.origin + proxied(roomId, source.TranscodingUrl)
         const media = new chrome.cast.media.MediaInfo(url, 'application/x-mpegURL')
         media.hlsSegmentFormat = chrome.cast.media.HlsSegmentFormat.FMP4
         media.hlsVideoSegmentFormat = chrome.cast.media.HlsVideoSegmentFormat.FMP4

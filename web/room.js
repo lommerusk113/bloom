@@ -1,6 +1,6 @@
 import { connectRoom } from './ws.js'
 import { adaptLead, decide, nextBackoff, targetPosition } from './sync.js'
-import { deviceProfile, playbackInfo, proxied, stopStream, subtitlePath, withDevice } from './playback.js'
+import { deviceProfile, playbackInfo, proxied, stopStream, subtitlePath } from './playback.js'
 import { setupCast } from './cast.js'
 
 const $ = (id) => document.getElementById(id)
@@ -103,20 +103,20 @@ async function load(itemId) {
     if (current?.source) {
         hls?.destroy() // its segment requests would fail once the transcode is stopped
         hls = null
-        stopStream(roomId, current.source.TranscodingUrl, deviceId)
+        stopStream(roomId, current.source.TranscodingUrl)
     }
     current = { itemId, source: null }
     $('status').textContent = 'Loading…'
     try {
         const source = await playbackInfo(roomId, itemId, deviceProfile(video, safeItem === itemId), { deviceId, audio: prefs.audio, subs, bitrate: prefs.bitrate })
         if (token !== loadToken) {
-            stopStream(roomId, source.TranscodingUrl, deviceId) // superseded: don't leak its transcode
+            stopStream(roomId, source.TranscodingUrl) // superseded: don't leak its transcode
             return
         }
         current = { itemId, source }
         prefs.audio ??= source.DefaultAudioStreamIndex ?? null
         prefs.subs ??= source.DefaultSubtitleStreamIndex ?? -1
-        attach(proxied(roomId, withDevice(source.TranscodingUrl, deviceId)))
+        attach(proxied(roomId, source.TranscodingUrl))
         showSubtitles()
         fillPickers()
         $('status').textContent = ''
@@ -143,7 +143,7 @@ function retryLoad(token, itemId, message) {
 
 addEventListener('pagehide', () => {
     if (current?.source) {
-        stopStream(roomId, current.source.TranscodingUrl, deviceId)
+        stopStream(roomId, current.source.TranscodingUrl)
     }
 })
 addEventListener('pageshow', (event) => {
@@ -191,7 +191,7 @@ function recoverMedia() {
     } else {
         hls.destroy()
         hls = null
-        stopStream(roomId, current.source.TranscodingUrl, deviceId)
+        stopStream(roomId, current.source.TranscodingUrl)
         $('status').textContent = 'This video can’t be played in this browser'
     }
 }

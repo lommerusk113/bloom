@@ -4,20 +4,13 @@ export const proxied = (roomId, path) => `/r/${roomId}/jf${path}`
 
 export const subtitlePath = (itemId, sourceId, index) => `/Videos/${itemId}/${sourceId}/Subtitles/${index}/0/Stream.vtt`
 
-/** Gives each viewer its own Jellyfin transcode job (all proxied requests share one API key). */
-export function withDevice(url, deviceId) {
-    const u = new URL(url, location.origin)
-    u.searchParams.set('DeviceId', deviceId)
-    return u.pathname + u.search
-}
-
 /** Asks Jellyfin to end the transcode behind a TranscodingUrl; best effort, also while the page unloads. */
-export function stopStream(roomId, transcodingUrl, deviceId) {
+export function stopStream(roomId, transcodingUrl) {
     const id = new URL(transcodingUrl, location.origin).searchParams.get('PlaySessionId')
     if (!id) {
         return
     }
-    fetch(proxied(roomId, '/Videos/ActiveEncodings?' + new URLSearchParams({ DeviceId: deviceId, PlaySessionId: id })), { method: 'DELETE', keepalive: true }).catch(() => {})
+    fetch(proxied(roomId, '/Videos/ActiveEncodings?' + new URLSearchParams({ PlaySessionId: id })), { method: 'DELETE', keepalive: true }).catch(() => {})
 }
 
 /**
