@@ -207,7 +207,7 @@ test('proxy caps play sessions per room', async () => {
     close()
 })
 
-test('proxy forgets play sessions unused for two minutes', async () => {
+test('idle play sessions keep access but stop counting toward the cap', async () => {
     const room = createRoom('r', 0)
     room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
     let now = 0
@@ -215,11 +215,31 @@ test('proxy forgets play sessions unused for two minutes', async () => {
     for (let i = 0; i < 24; i++) {
         await playbackInfo(base)
     }
+    assert.equal((await playbackInfo(base)).status, 429)
     now = 100_000
     assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p1`)).status, 200)
+    assert.equal((await playbackInfo(base)).status, 429)
     now = 200_000
-    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p1`)).status, 200)
-    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p2`)).status, 403)
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p2`)).status, 200)
     assert.equal((await playbackInfo(base)).status, 200)
+    close()
+})
+
+test('proxy keeps at most 500 issued play sessions, dropping the least recently used', async () => {
+    const room = createRoom('r', 0)
+    room.queue.push({ id: ITEM, name: 'X', runtime: 10 })
+    let now = 0
+    const { base, close } = await serve(room, fakeJellyfin(), () => now)
+    await playbackInfo(base)
+    await playbackInfo(base)
+    now = 1
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p1`)).status, 200)
+    for (let i = 0; i < 499; i++) {
+        now += 10_000
+        assert.equal((await playbackInfo(base)).status, 200)
+    }
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p2`)).status, 403)
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p1`)).status, 200)
+    assert.equal((await fetch(`${base}/Videos/${ITEM}/main.m3u8?PlaySessionId=p3`)).status, 200)
     close()
 })

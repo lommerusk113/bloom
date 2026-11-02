@@ -14,12 +14,16 @@ const ALLOWED: ReadonlyArray<[string, RegExp]> = [
 const PASSED_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control']
 const MAX_BODY = 1_000_000
 const MAX_SESSIONS = 24
-/** Play sessions without HLS requests this long are dropped (crashed tabs, stopped casts); Jellyfin kills such idle transcodes too. */
+/** Play sessions without HLS requests this long stop counting toward MAX_SESSIONS (paused players, crashed tabs); Jellyfin kills such idle transcodes too. */
 const SESSION_IDLE_MS = 120_000
+const MAX_ISSUED = 500
 const HLS = /\.m3u8$|\/hls1\//i
 const STOP = /^\/Videos\/ActiveEncodings$/i
 
-/** PlaySessionIds of the transcodes started through each room, with when each was last used; HLS and stop requests must name one. */
+/**
+ * PlaySessionIds issued by each room's PlaybackInfo (HLS and stop requests must name one), with when each was last used.
+ * An id stays usable until stopped, so a long pause can resume; only recently used ids count toward MAX_SESSIONS.
+ */
 const sessions = new WeakMap<Room, Map<string, number>>()
 
 function playSessionId(params: URLSearchParams): string | undefined {
@@ -104,11 +108,6 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
     const method = req.method ?? 'GET'
     const playSessions = sessions.get(room) ?? new Map<string, number>()
     sessions.set(room, playSessions)
-    for (const [sessionId, lastSeen] of playSessions) {
-        if (now - lastSeen > SESSION_IDLE_MS) {
-            playSessions.delete(sessionId)
-        }
-    }
     const id = playSessionId(url.searchParams)
     const stop = method === 'DELETE' && STOP.test(url.pathname)
     if (!stop) {
@@ -134,7 +133,7 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
         }
         url.searchParams.set('DeviceId', id!)
     }
-    if (/\/PlaybackInfo$/i.test(url.pathname) && playSessions.size >= MAX_SESSIONS) {
+    if (/\/PlaybackInfo$/i.test(url.pathname) && [...playSessions.values()].filter(seen => now - seen <= SESSION_IDLE_MS).length >= MAX_SESSIONS) {
         res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Too many active streams in this room' }))
         return
     }
@@ -186,6 +185,11 @@ export async function proxyRequest(req: IncomingMessage, res: ServerResponse, ro
         delete out['content-length']
         try {
             const clean = sanitizePlaybackInfo(text, playSessions, now)
+            // ponytail: O(n) scan per eviction, fine at MAX_ISSUED
+            while (playSessions.size > MAX_ISSUED) {
+                const [oldest] = [...playSessions].reduce((a, b) => (b[1] < a[1] ? b : a))
+                playSessions.delete(oldest)
+            }
             res.writeHead(upstream.status, out).end(jf.redact(clean))
         } catch {
             const ok = upstream.status >= 200 && upstream.status < 300
