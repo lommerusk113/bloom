@@ -159,6 +159,17 @@ test('mixed command kinds do not trip out-of-sync', async () => {
     assert.equal(r.nativeSessions[0].status, 'syncing')
 })
 
+test('forgetRoom drops sync history, so cooldowns no longer apply', async () => {
+    const r = room()
+    const { conductor, calls } = setup(r, () => session(100, { paused: true, checkIn: NOW }))
+    await conductor.tick(NOW)
+    await conductor.tick(NOW + 1000)
+    assert.deepEqual(calls, ['unpause'])
+    conductor.forgetRoom('r1')
+    await conductor.tick(NOW + 2000)
+    assert.deepEqual(calls, ['unpause', 'unpause'])
+})
+
 test('a user pause on a native app pauses the room', async () => {
     const r = room()
     let current = session(100, { checkIn: NOW })

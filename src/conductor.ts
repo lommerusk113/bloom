@@ -242,5 +242,13 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
         reset(roomId: string, sessionId: string): void {
             tracks.delete(`${roomId}:${sessionId}`)
         },
+        /** Drop all sync history of a deleted room. */
+        forgetRoom(roomId: string): void {
+            for (const key of tracks.keys()) {
+                if (key.startsWith(`${roomId}:`)) {
+                    tracks.delete(key)
+                }
+            }
+        },
     }
 }

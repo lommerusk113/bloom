@@ -291,6 +291,7 @@ setInterval(() => {
             rooms.delete(room.id)
             clients.delete(room.id)
             emptySince.delete(room.id)
+            conductor.forgetRoom(room.id)
         }
     }
 }, 1000)
