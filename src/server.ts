@@ -32,7 +32,8 @@ const CONTENT_TYPES: Record<string, string> = {
 }
 
 const PORT = Number(process.env.PORT ?? 8080)
-const PUBLIC_URL = process.env.PUBLIC_URL ?? `http://localhost:${PORT}`
+// Coolify's SERVICE_FQDN_* may be a bare domain; it is served over https
+const PUBLIC_URL = withScheme(process.env.PUBLIC_URL || `http://localhost:${PORT}`)
 const PUBLIC_HOST = new URL(PUBLIC_URL).host
 const jf = createJellyfin(required('JELLYFIN_URL').replace(/\/$/, ''), required('JELLYFIN_API_KEY'), process.env.JELLYFIN_USER_ID || undefined)
 const SECURE = PUBLIC_URL.startsWith('https:')
@@ -47,6 +48,10 @@ const emptySince = new Map<string, number>()
 const pendingBroadcasts = new Set<Room>()
 let flushTimer: NodeJS.Timeout | undefined
 let jellyfinError: string | null = 'Not checked yet'
+
+function withScheme(url: string): string {
+    return /^https?:\/\//.test(url) ? url : `https://${url}`
+}
 
 function required(name: string): string {
     const value = process.env[name]

@@ -41,6 +41,14 @@ Bloom never encodes video itself. Every guest gets an HLS stream from Jellyfin (
 | `TMDB_API_KEY` | no | Free key from themoviedb.org (Settings → API); adds “Trending this week” and “Popular right now” rows for titles in your library |
 | `PORT` | no | Default `8080` |
 
+## Deploy with Coolify
+
+1. **New resource → Public/Private repository** → this repo, build pack **Docker Compose**, compose file `docker-compose.yml`.
+2. Under **Environment Variables**, fill in `JELLYFIN_URL`, `JELLYFIN_API_KEY` and `HOST_PASSWORD` (required), and optionally `TMDB_API_KEY` and `JELLYFIN_USER_ID`.
+3. Set the domain for the `bloom` service (Coolify fills `SERVICE_FQDN_BLOOM_8080`, which also becomes `PUBLIC_URL`) and deploy.
+
+`JELLYFIN_URL` must be reachable from the Bloom container: if Jellyfin runs on the same server outside Coolify, use its public URL or the host's LAN address, not `localhost`.
+
 ## Using it
 
 1. Open the external URL, log in, create a room, search and add things to the queue.
