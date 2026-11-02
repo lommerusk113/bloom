@@ -1,0 +1,310 @@
+import { randomBytes } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { extname, join } from 'node:path'
+import WebSocket, { WebSocketServer } from 'ws'
+import { createAuth } from './auth.ts'
+import { createConductor } from './conductor.ts'
+import { createJellyfin } from './jellyfin.ts'
+import { proxyRequest, readBody } from './proxy.ts'
+import { advanceIfEnded, apply, createRoom, parseCommand, type Room } from './room.ts'
+
+type Client = { ws: WebSocket; name: string; isHost: boolean }
+
+const ROOM_TTL_MS = 30 * 60_000
+const WEB_DIR = join(import.meta.dirname, '..', 'web')
+const HLS_JS = join(import.meta.dirname, '..', 'node_modules', 'hls.js', 'dist', 'hls.min.js')
+const CONTENT_TYPES: Record<string, string> = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+}
+
+const PORT = Number(process.env.PORT ?? 8080)
+const PUBLIC_URL = process.env.PUBLIC_URL ?? `http://localhost:${PORT}`
+const jf = createJellyfin(required('JELLYFIN_URL').replace(/\/$/, ''), required('JELLYFIN_API_KEY'))
+const auth = createAuth(required('HOST_PASSWORD'), PUBLIC_URL.startsWith('https:'))
+
+const rooms = new Map<string, Room>()
+const clients = new Map<string, Set<Client>>()
+const emptySince = new Map<string, number>()
+const conductor = createConductor(jf, rooms, broadcast)
+let jellyfinError: string | null = 'Not checked yet'
+
+function required(name: string): string {
+    const value = process.env[name]
+    if (!value) {
+        throw new Error(`Missing required env var ${name}`)
+    }
+    return value
+}
+
+// --- room state fan-out ---
+
+function stateMessage(room: Room): string {
+    const viewers = [...(clients.get(room.id) ?? [])].map(c => c.name)
+    return JSON.stringify({ type: 'state', room, viewers, serverNow: Date.now() })
+}
+
+function broadcast(room: Room): void {
+    const msg = stateMessage(room)
+    for (const client of clients.get(room.id) ?? []) {
+        if (client.ws.readyState === WebSocket.OPEN) {
+            client.ws.send(msg)
+        }
+    }
+}
+
+// --- http ---
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+    res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+}
+
+async function sendFile(res: ServerResponse, path: string): Promise<void> {
+    try {
+        const body = await readFile(path)
+        res.writeHead(200, { 'content-type': CONTENT_TYPES[extname(path)] ?? 'application/octet-stream' }).end(body)
+    } catch {
+        res.writeHead(404).end()
+    }
+}
+
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+    try {
+        return JSON.parse(await readBody(req))
+    } catch {
+        return {}
+    }
+}
+
+function roomSummary(room: Room) {
+    return { id: room.id, title: room.queue[room.index]?.name ?? 'Empty room', viewers: clients.get(room.id)?.size ?? 0 }
+}
+
+async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    const path = url.pathname
+    const method = req.method ?? 'GET'
+
+    const proxied = /^\/r\/([\w-]+)\/jf(\/.*)$/.exec(path)
+    if (proxied) {
+        const room = rooms.get(proxied[1])
+        return room ? proxyRequest(req, res, room, proxied[2] + url.search, jf) : sendJson(res, 404, { error: 'Room not found' })
+    }
+
+    if (method === 'GET') {
+        if (path === '/') {
+            return sendFile(res, join(WEB_DIR, 'host.html'))
+        }
+        if (/^\/r\/[\w-]+$/.test(path)) {
+            return sendFile(res, join(WEB_DIR, 'room.html'))
+        }
+        if (path === '/vendor/hls.min.js') {
+            return sendFile(res, HLS_JS)
+        }
+        const asset = /^\/web\/([\w-]+\.(?:js|css|html))$/.exec(path)
+        if (asset) {
+            return sendFile(res, join(WEB_DIR, asset[1]))
+        }
+        if (path === '/api/health') {
+            return sendJson(res, 200, { ok: true })
+        }
+        if (path === '/api/me') {
+            return sendJson(res, 200, { host: auth.isHost(req), jellyfinError })
+        }
+    }
+
+    if (method === 'POST' && path === '/api/login') {
+        const body = await readJson(req)
+        // ponytail: behind a reverse proxy all logins share the proxy's ip, making the limit global
+        const token = auth.login(String(body.password ?? ''), req.socket.remoteAddress ?? '')
+        if (!token) {
+            return sendJson(res, 401, { error: 'Wrong password or too many attempts' })
+        }
+        res.setHeader('set-cookie', auth.cookie(token))
+        return sendJson(res, 200, { ok: true })
+    }
+
+    if (!auth.isHost(req)) {
+        return sendJson(res, 403, { error: 'Host login required' })
+    }
+
+    if (method === 'GET' && path === '/api/rooms') {
+        return sendJson(res, 200, [...rooms.values()].map(roomSummary))
+    }
+    if (method === 'POST' && path === '/api/rooms') {
+        const id = randomBytes(16).toString('base64url')
+        rooms.set(id, createRoom(id, Date.now()))
+        return sendJson(res, 200, { id })
+    }
+    if (method === 'GET' && path === '/api/search') {
+        return sendJson(res, 200, await jf.search(url.searchParams.get('q') ?? ''))
+    }
+    if (method === 'GET' && path === '/api/sessions') {
+        const sessions = (await jf.sessions()).filter(s => s.SupportsRemoteControl)
+        return sendJson(res, 200, sessions.map(s => ({ id: s.Id, label: `${s.UserName ?? 'Unknown'} – ${s.DeviceName} (${s.Client})` })))
+    }
+
+    return sendJson(res, 404, { error: 'Not found' })
+}
+
+const server = createServer((req, res) => {
+    handle(req, res).catch((err: Error) => {
+        if (err.name !== 'AbortError') {
+            console.error(`${req.method} ${req.url} failed:`, err.message)
+        }
+        if (res.headersSent) {
+            res.destroy()
+        } else {
+            sendJson(res, 502, { error: 'Upstream error' })
+        }
+    })
+})
+
+// --- websockets ---
+
+const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 })
+
+server.on('upgrade', (req, socket, head) => {
+    const match = /^\/ws\/([\w-]+)$/.exec(new URL(req.url ?? '/', 'http://localhost').pathname)
+    const room = match ? rooms.get(match[1]) : undefined
+    if (!room) {
+        socket.destroy()
+        return
+    }
+    wss.handleUpgrade(req, socket, head, ws => onJoin(ws, room, auth.isHost(req)))
+})
+
+function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
+
+    const client: Client = { ws, name: 'Guest', isHost }
+    const set = clients.get(room.id) ?? new Set<Client>()
+    clients.set(room.id, set)
+    set.add(client)
+    ws.send(JSON.stringify({ type: 'welcome', isHost }))
+    broadcast(room)
+
+    ws.on('message', data => {
+        let msg: unknown
+        try {
+            msg = JSON.parse(String(data))
+        } catch {
+            return
+        }
+        if (typeof msg !== 'object' || msg === null) {
+            return
+        }
+        onMessage(client, room, msg as Record<string, unknown>).catch((err: Error) => {
+            console.error('Room message failed:', err.message)
+            ws.send(JSON.stringify({ type: 'error', message: err.message }))
+        })
+    })
+
+    ws.on('close', () => {
+        set.delete(client)
+        broadcast(room)
+    })
+}
+
+async function onMessage(client: Client, room: Room, msg: Record<string, unknown>): Promise<void> {
+
+    const now = Date.now()
+    switch (msg.type) {
+        case 'hello':
+            client.name = String(msg.name ?? '').trim().slice(0, 32) || 'Guest'
+            break
+        case 'ping':
+            client.ws.send(JSON.stringify({ type: 'pong', t0: msg.t0, server: now }))
+            return
+        case 'cmd': {
+            const cmd = parseCommand(msg.cmd)
+            if (!cmd || !apply(room, cmd, client.isHost, now)) {
+                client.ws.send(stateMessage(room)) // rejected: resync the sender
+                return
+            }
+            break
+        }
+        case 'addItem':
+            if (!client.isHost) {
+                return
+            }
+            apply(room, { type: 'queueAdd', items: await jf.queueItems(String(msg.itemId)) }, true, now)
+            break
+        case 'nativeAdd': {
+            if (!client.isHost) {
+                return
+            }
+            const sessionId = String(msg.sessionId)
+            const trusted = msg.trusted === true
+            const existing = room.nativeSessions.find(n => n.sessionId === sessionId)
+            if (existing) {
+                existing.status = 'syncing'
+                existing.trusted = trusted
+            } else {
+                room.nativeSessions.push({ sessionId, label: String(msg.label ?? sessionId).slice(0, 80), trusted, status: 'syncing' })
+            }
+            conductor.reset(room.id, sessionId)
+            break
+        }
+        case 'nativeRemove':
+            if (!client.isHost) {
+                return
+            }
+            room.nativeSessions = room.nativeSessions.filter(n => n.sessionId !== msg.sessionId)
+            conductor.reset(room.id, String(msg.sessionId))
+            break
+        default:
+            return
+    }
+
+    broadcast(room)
+}
+
+// --- background loops ---
+
+setInterval(() => {
+    const now = Date.now()
+    for (const room of rooms.values()) {
+        if (advanceIfEnded(room, now)) {
+            broadcast(room)
+        }
+        const idle = (clients.get(room.id)?.size ?? 0) === 0 && !room.nativeSessions.some(n => n.status === 'syncing')
+        if (!idle) {
+            emptySince.delete(room.id)
+            continue
+        }
+        const since = emptySince.get(room.id) ?? now
+        emptySince.set(room.id, since)
+        if (now - since > ROOM_TTL_MS) {
+            rooms.delete(room.id)
+            clients.delete(room.id)
+            emptySince.delete(room.id)
+        }
+    }
+}, 1000)
+
+setInterval(() => {
+    conductor.tick().catch((err: Error) => console.error('Conductor:', err.message))
+}, 1000)
+
+async function checkJellyfin(): Promise<void> {
+    const before = jellyfinError
+    try {
+        const info = await jf.systemInfo()
+        jellyfinError = null
+        if (before !== null) {
+            console.log(`Connected to Jellyfin "${info.ServerName}" ${info.Version}`)
+        }
+    } catch (err) {
+        jellyfinError = `Cannot reach Jellyfin: ${(err as Error).message}`
+        if (before !== jellyfinError) {
+            console.error(jellyfinError)
+        }
+    }
+}
+
+checkJellyfin()
+setInterval(checkJellyfin, 30_000)
+server.listen(PORT, () => console.log(`Watchparty listening on :${PORT} (${PUBLIC_URL})`))
