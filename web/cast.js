@@ -128,7 +128,8 @@ export function setupCast({ roomId, deviceId, getState }) {
                 return
             }
             if (!player.isMediaLoaded) {
-                if (!loading && Date.now() - lastAction > 3 * COOLDOWN_MS) {
+                const finished = item.runtime > 0 && target >= item.runtime - 3 // end of queue: the receiver went idle
+                if (!finished && Date.now() - lastAction > 3 * COOLDOWN_MS) {
                     // the receiver dropped the media (error, stopped from Google Home): load it again
                     loadedItem = null
                     retryDelay = nextBackoff(retryDelay, COOLDOWN_MS, MAX_RETRY_MS)
