@@ -11,6 +11,15 @@ export function withDevice(url, deviceId) {
     return u.pathname + u.search
 }
 
+/** Asks Jellyfin to end the transcode behind a TranscodingUrl; best effort, also while the page unloads. */
+export function stopStream(roomId, transcodingUrl, deviceId) {
+    const id = new URL(transcodingUrl, location.origin).searchParams.get('PlaySessionId')
+    if (!id) {
+        return
+    }
+    fetch(proxied(roomId, '/Videos/ActiveEncodings?' + new URLSearchParams({ DeviceId: deviceId, PlaySessionId: id })), { method: 'DELETE', keepalive: true }).catch(() => {})
+}
+
 /**
  * Everything is served as HLS so the proxy only needs streaming paths.
  * Video is copied (remux) whenever the browser can decode it; Jellyfin transcodes only what it must.

@@ -1,6 +1,6 @@
 import { connectRoom } from './ws.js'
 import { adaptLead, decide, targetPosition } from './sync.js'
-import { deviceProfile, playbackInfo, proxied, subtitlePath, withDevice } from './playback.js'
+import { deviceProfile, playbackInfo, proxied, stopStream, subtitlePath, withDevice } from './playback.js'
 import { setupCast } from './cast.js'
 
 const $ = (id) => document.getElementById(id)
@@ -96,6 +96,11 @@ function currentTarget() {
 async function load(itemId) {
     const token = ++loadToken
     const subs = subtitleParam()
+    if (current?.source) {
+        hls?.destroy() // its segment requests would fail once the transcode is stopped
+        hls = null
+        stopStream(roomId, current.source.TranscodingUrl, deviceId)
+    }
     current = { itemId, source: null }
     $('status').textContent = 'Loading…'
     try {
@@ -123,7 +128,12 @@ async function load(itemId) {
     }
 }
 
-// ponytail: the old Jellyfin transcode isn't stopped on reload; Jellyfin kills idle HLS jobs itself
+addEventListener('pagehide', () => {
+    if (current?.source) {
+        stopStream(roomId, current.source.TranscodingUrl, deviceId)
+    }
+})
+
 function attach(src) {
     hls?.destroy()
     hls = null
