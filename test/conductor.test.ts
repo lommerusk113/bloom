@@ -64,6 +64,13 @@ test('pause state mismatch is corrected', () => {
     assert.deepEqual(decide(session(100), room({ playing: false }), track(), NOW), { kind: 'pause' })
 })
 
+test('an emptied queue pauses a playing session', () => {
+    const r = room({ queue: [], index: 0, playing: false, position: 0, updatedAt: NOW - 20_000 })
+    assert.deepEqual(decide(session(100), r, track(), NOW), { kind: 'pause' })
+    assert.deepEqual(decide(session(100), r, track({ lastCmdAt: NOW - 1000, lastKind: 'pause' }), NOW), { kind: 'wait' })
+    assert.deepEqual(decide(session(100, { paused: true }), r, track(), NOW), { kind: 'none' })
+})
+
 test('drift over 3s seeks to the room position', () => {
     assert.deepEqual(decide(session(104), room(), track(), NOW), { kind: 'seek', position: 100 })
 })

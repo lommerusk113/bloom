@@ -97,12 +97,16 @@ export function decide(s: JfSession | undefined, room: Room, t: Track, now: numb
     if (!s) {
         return { kind: 'lost' }
     }
+    const cooling = (ms: number): boolean => now - t.lastCmdAt < ms && room.updatedAt <= t.lastCmdAt
     const item = room.queue[room.index]
     if (!item) {
-        return { kind: 'none' }
+        // the queue emptied: stop a session still playing the removed item
+        if (believed(s, t, now).paused) {
+            return { kind: 'none' }
+        }
+        return cooling(COMMAND_COOLDOWN_MS) ? { kind: 'wait' } : { kind: 'pause' }
     }
 
-    const cooling = (ms: number): boolean => now - t.lastCmdAt < ms && room.updatedAt <= t.lastCmdAt
     if (normalizeId(s.NowPlayingItem?.Id ?? '') !== normalizeId(item.id)) {
         // the session finished the item the room is ending too; relaunching it would replay the last seconds
         if (item.runtime > 0 && currentPosition(room, now) >= item.runtime - SEEK_THRESHOLD) {
