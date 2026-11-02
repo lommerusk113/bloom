@@ -14,6 +14,7 @@ let state = null      // last 'state' message
 let isHost = false
 let current = null    // { itemId, source } of the loaded stream; source null while loading
 let loadToken = 0
+let retry = { itemId: null, delay: 5000 } // backoff for consecutive load failures of one item
 let hls = null
 let dragging = false
 let seekLead = 1        // seconds to seek past the target, learned from how far behind seeks land
@@ -115,16 +116,22 @@ async function load(itemId) {
         showSubtitles()
         fillPickers()
         $('status').textContent = ''
+        retry = { itemId: null, delay: 5000 }
     } catch (err) {
         if (token !== loadToken) {
             return
         }
-        $('status').textContent = `${err.message} – retrying…`
+        if (retry.itemId !== itemId) {
+            retry = { itemId, delay: 5000 }
+        }
+        const delay = retry.delay
+        retry.delay = Math.min(delay * 2, 60_000)
+        $('status').textContent = `${err.message} – retrying in ${delay / 1000}s…`
         setTimeout(() => {
             if (token === loadToken) {
                 load(itemId)
             }
-        }, 5000)
+        }, delay)
     }
 }
 
