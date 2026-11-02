@@ -303,6 +303,15 @@ video.addEventListener('playing', () => {
 video.addEventListener('canplay', () => { stalled = false })
 video.addEventListener('seeked', () => { lastSeekedAt = Date.now() })
 
+function isBuffered(time) {
+    for (let i = 0; i < video.buffered.length; i++) {
+        if (video.buffered.start(i) <= time && time <= video.buffered.end(i)) {
+            return true
+        }
+    }
+    return false
+}
+
 function syncNow() {
     if (!state) {
         return
@@ -344,8 +353,9 @@ function syncNow() {
         if (Date.now() - lastSeekedAt < 4000) {
             return // let the last seek settle before judging it
         }
-        video.currentTime = Math.min(target + (room.playing ? seekLead : 0), runtime || Infinity)
-        pendingSeek = room.playing
+        const far = room.playing && !isBuffered(target) // buffered seeks land instantly: no lead, nothing to learn
+        video.currentTime = Math.min(target + (far ? seekLead : 0), runtime || Infinity)
+        pendingSeek = far
     }
     video.playbackRate = d.action === 'rate' ? d.rate : 1
 }
