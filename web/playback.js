@@ -23,10 +23,10 @@ export function stopStream(roomId, transcodingUrl, deviceId) {
 /**
  * Everything is served as HLS so the proxy only needs streaming paths.
  * Video is copied (remux) whenever the browser can decode it; Jellyfin transcodes only what it must.
- * castSafe: H.264/AAC only, for the Chromecast Default Receiver.
+ * safe: H.264/AAC only: Chromecast Default Receiver, and the fallback after browser media errors.
  */
-export function deviceProfile(video, castSafe = false) {
-    const can = (type) => !castSafe && Boolean(
+export function deviceProfile(video, safe = false) {
+    const can = (type) => !safe && Boolean(
         window.MediaSource?.isTypeSupported(type) || window.ManagedMediaSource?.isTypeSupported(type) || video?.canPlayType(type),
     )
     const videoCodecs = ['h264']
