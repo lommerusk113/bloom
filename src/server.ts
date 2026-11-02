@@ -56,17 +56,22 @@ function stateMessage(room: Room, isHost: boolean): string {
     return JSON.stringify({ type: 'state', room: visible, viewers, serverNow: Date.now() })
 }
 
+/** Every websocket send goes through here so a client that stops reading is dropped, not buffered for. */
+function send(client: Client, data: string): void {
+    if (client.ws.readyState !== WebSocket.OPEN) {
+        return
+    }
+    if (client.ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+        client.ws.terminate()
+        return
+    }
+    client.ws.send(data)
+}
+
 function broadcast(room: Room): void {
     const messages = { host: stateMessage(room, true), guest: stateMessage(room, false) }
     for (const client of clients.get(room.id) ?? []) {
-        if (client.ws.readyState !== WebSocket.OPEN) {
-            continue
-        }
-        if (client.ws.bufferedAmount > MAX_BUFFERED_BYTES) {
-            client.ws.terminate()
-            continue
-        }
-        client.ws.send(client.isHost ? messages.host : messages.guest)
+        send(client, client.isHost ? messages.host : messages.guest)
     }
 }
 
@@ -211,7 +216,7 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
     ws.on('pong', () => alive.add(ws))
     // oversized or malformed frames emit 'error'; unhandled it would crash the process
     ws.on('error', () => ws.terminate())
-    ws.send(JSON.stringify({ type: 'welcome', isHost }))
+    send(client, JSON.stringify({ type: 'welcome', isHost }))
     broadcast(room)
 
     ws.on('message', data => {
@@ -232,7 +237,7 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
         }
         onMessage(client, room, msg as Record<string, unknown>).catch((err: Error) => {
             console.error('Room message failed:', err.message)
-            ws.send(JSON.stringify({ type: 'error', message: err.message }))
+            send(client, JSON.stringify({ type: 'error', message: err.message }))
         })
     })
 
@@ -279,12 +284,12 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
             break
         }
         case 'ping':
-            client.ws.send(JSON.stringify({ type: 'pong', t0: msg.t0, server: now }))
+            send(client, JSON.stringify({ type: 'pong', t0: Number(msg.t0) || 0, server: now }))
             return
         case 'cmd': {
             const cmd = parseCommand(msg.cmd)
             if (!cmd || !apply(room, cmd, client.isHost, now)) {
-                client.ws.send(stateMessage(room, client.isHost)) // rejected: resync the sender
+                send(client, stateMessage(room, client.isHost)) // rejected: resync the sender
                 return
             }
             break
