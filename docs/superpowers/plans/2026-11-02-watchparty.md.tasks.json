@@ -4,13 +4,13 @@
     {
       "id": 0,
       "subject": "Task 0: Project scaffold",
-      "status": "pending",
+      "status": "completed",
       "description": "See plan section 'Task 0: Project scaffold'.\n\n```json:metadata\n{\"files\": [\"package.json\", \"tsconfig.json\", \".gitignore\", \".dockerignore\"], \"verifyCommand\": \"npm ls ws hls.js typescript @types/node @types/ws\"}\n```"
     },
     {
       "id": 1,
       "subject": "Task 1: Room state",
-      "status": "pending",
+      "status": "completed",
       "description": "See plan section 'Task 1: Room state'.\n\n```json:metadata\n{\"files\": [\"src/room.ts\", \"test/room.test.ts\"], \"verifyCommand\": \"npm test && npm run check\"}\n```",
       "blockedBy": [
         0
@@ -19,7 +19,7 @@
     {
       "id": 2,
       "subject": "Task 2: Browser sync math",
-      "status": "pending",
+      "status": "completed",
       "description": "See plan section 'Task 2: Browser sync math'.\n\n```json:metadata\n{\"files\": [\"web/sync.js\", \"test/sync.test.js\"], \"verifyCommand\": \"npm test\"}\n```",
       "blockedBy": [
         0
@@ -28,7 +28,7 @@
     {
       "id": 3,
       "subject": "Task 3: Jellyfin client and guest proxy",
-      "status": "pending",
+      "status": "completed",
       "description": "See plan section 'Task 3: Jellyfin client and guest proxy'.\n\n```json:metadata\n{\"files\": [\"src/jellyfin.ts\", \"src/proxy.ts\", \"test/proxy.test.ts\"], \"verifyCommand\": \"npm test && npm run check\"}\n```",
       "blockedBy": [
         1
@@ -37,7 +37,7 @@
     {
       "id": 4,
       "subject": "Task 4: Host auth",
-      "status": "pending",
+      "status": "completed",
       "description": "See plan section 'Task 4: Host auth'.\n\n```json:metadata\n{\"files\": [\"src/auth.ts\", \"test/auth.test.ts\"], \"verifyCommand\": \"npm test && npm run check\"}\n```",
       "blockedBy": [
         0
@@ -46,7 +46,7 @@
     {
       "id": 5,
       "subject": "Task 5: Native conductor",
-      "status": "pending",
+      "status": "completed",
       "description": "See plan section 'Task 5: Native conductor'.\n\n```json:metadata\n{\"files\": [\"src/conductor.ts\", \"test/conductor.test.ts\"], \"verifyCommand\": \"npm test && npm run check\"}\n```",
       "blockedBy": [
         1,
@@ -56,7 +56,7 @@
     {
       "id": 6,
       "subject": "Task 6: Server wiring",
-      "status": "pending",
+      "status": "completed",
       "description": "See plan section 'Task 6: Server wiring'.\n\n```json:metadata\n{\"files\": [\"src/server.ts\", \"web/style.css\", \"test/server.test.ts\"], \"verifyCommand\": \"npm test && npm run check\"}\n```",
       "blockedBy": [
         3,
@@ -67,7 +67,7 @@
     {
       "id": 7,
       "subject": "Task 7: Shared web modules and host UI",
-      "status": "pending",
+      "status": "completed",
       "description": "See plan section 'Task 7: Shared web modules and host UI'.\n\n```json:metadata\n{\"files\": [\"web/ws.js\", \"web/playback.js\", \"web/style.css\", \"web/host.html\", \"web/host.js\"], \"verifyCommand\": \"manual\"}\n```",
       "blockedBy": [
         2,
@@ -77,7 +77,7 @@
     {
       "id": 8,
       "subject": "Task 8: Guest player",
-      "status": "pending",
+      "status": "completed",
       "description": "See plan section 'Task 8: Guest player'.\n\n```json:metadata\n{\"files\": [\"web/room.html\", \"web/room.js\"], \"verifyCommand\": \"manual\"}\n```",
       "blockedBy": [
         7
@@ -86,7 +86,7 @@
     {
       "id": 9,
       "subject": "Task 9: Chromecast",
-      "status": "pending",
+      "status": "completed",
       "description": "See plan section 'Task 9: Chromecast'.\n\n```json:metadata\n{\"files\": [\"web/cast.js\", \"web/room.html\", \"web/room.js\"], \"verifyCommand\": \"manual\"}\n```",
       "blockedBy": [
         8
@@ -95,12 +95,12 @@
     {
       "id": 10,
       "subject": "Task 10: Docker, README and end-to-end check",
-      "status": "pending",
+      "status": "completed",
       "description": "See plan section 'Task 10: Docker, README and end-to-end check'.\n\n```json:metadata\n{\"files\": [\"Dockerfile\", \"docker-compose.example.yml\", \"README.md\"], \"verifyCommand\": \"docker build -t watchparty .\"}\n```",
       "blockedBy": [
         9
       ]
     }
   ],
-  "lastUpdated": "2026-11-02T00:00:00Z"
+  "lastUpdated": "2026-11-02T12:00:00Z"
 }
