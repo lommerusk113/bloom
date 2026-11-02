@@ -36,7 +36,7 @@ export function createJellyfin(baseUrl: string, apiKey: string) {
     function raw(path: string, init: RequestInit = {}): Promise<Response> {
         const headers = new Headers(init.headers)
         headers.set('Authorization', auth)
-        return fetch(baseUrl + path, { ...init, headers })
+        return fetch(baseUrl + path, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(10_000) })
     }
 
     async function json<T>(path: string, init?: RequestInit): Promise<T> {
