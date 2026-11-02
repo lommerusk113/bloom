@@ -40,14 +40,21 @@ test('guests never edit the queue and are blocked when guest control is off', ()
     assert.equal(apply(room, { type: 'pause' }, true, 0), true)
 })
 
-test('next plays the following item and stops after the last', () => {
+test('next plays the following item and stops at the end of the last', () => {
     const room = roomWith([A, B])
     apply(room, { type: 'seek', position: 50 }, true, 0)
     apply(room, { type: 'next' }, true, 0)
     assert.deepEqual([room.index, room.position, room.playing], [1, 0, true])
     apply(room, { type: 'next' }, true, 0)
-    assert.deepEqual([room.index, room.position, room.playing], [1, 0, false])
+    assert.deepEqual([room.index, room.position, room.playing], [1, 200, false])
     assert.equal(apply(room, { type: 'jump', index: 5 }, true, 0), false)
+})
+
+test('next past a last item without runtime stops where it is', () => {
+    const room = roomWith([{ ...A, runtime: 0 }])
+    apply(room, { type: 'play' }, true, 0)
+    apply(room, { type: 'next' }, true, 42_000)
+    assert.deepEqual([room.index, room.position, room.playing], [0, 42, false])
 })
 
 test('removing items keeps the current item stable', () => {

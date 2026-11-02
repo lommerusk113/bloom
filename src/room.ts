@@ -130,9 +130,9 @@ function setPlayback(room: Room, playing: boolean, position: number, now: number
 function jumpTo(room: Room, index: number, now: number): boolean {
 
     if (index === room.queue.length && index > 0) {
-        // past the last item: stop on it
+        // past the last item: stop at its end (or where we are when the runtime is unknown)
+        room.position = room.queue[room.index].runtime || currentPosition(room, now)
         room.playing = false
-        room.position = 0
         room.updatedAt = now
         return true
     }
