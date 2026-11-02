@@ -151,8 +151,9 @@ test('websocket messages beyond the rate limit are dropped', async () => {
     }
     await guest.next(m => m.type === 'state' && m.viewers.includes('G19'))
     await sleep(300)
-    const states = guest.messages.filter(m => m.type === 'state')
-    assert.ok(states.length < 50, `got ${states.length} state messages`)
+    // only the first 20 hellos (G0..G19) fit the 1s window; later names must never be applied
+    const last = guest.messages.filter(m => m.type === 'state').at(-1)
+    assert.deepEqual(last?.viewers, ['G19'])
     assert.equal((await fetch(`${BASE}/api/health`)).status, 200)
     guest.close()
 })
