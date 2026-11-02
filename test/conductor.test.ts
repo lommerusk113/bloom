@@ -258,3 +258,16 @@ test('without a pinned clock each session step reads the time fresh', async (t) 
     await createConductor(jf, new Map([[r.id, r]]), () => {}).tick()
     assert.deepEqual(calls, ['s1 100', 's2 105'])
 })
+
+test('a seek that lands behind adds the learned lead to the next drift seek', async () => {
+    const r = room()
+    let current = session(110, { checkIn: NOW - 1000 })
+    const { conductor, calls } = setup(r, () => current)
+    await conductor.tick(NOW)
+    // newer than the seek, 2s behind the room
+    current = session(100, { checkIn: NOW + 2000 })
+    await conductor.tick(NOW + 2000)
+    current = session(106, { checkIn: NOW + 12_000 })
+    await conductor.tick(NOW + 12_000)
+    assert.deepEqual(calls, ['seek 100', 'seek 114'])
+})
