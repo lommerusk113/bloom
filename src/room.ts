@@ -86,7 +86,8 @@ export function advanceIfEnded(room: Room, now: number): boolean {
 }
 
 /**
- * Advances rooms whose item ended and deletes rooms idle (no viewers, no syncing native session) for over 30 minutes.
+ * Advances rooms whose item ended and deletes rooms idle (no viewers, and an empty queue or no syncing native session)
+ * for over 30 minutes.
  * emptySince holds when each room became idle and is updated in place.
  */
 export function sweepRooms(
@@ -102,7 +103,7 @@ export function sweepRooms(
         if (advanceIfEnded(room, now)) {
             advanced.push(room)
         }
-        const idle = viewerCount(room.id) === 0 && !room.nativeSessions.some(n => n.status === 'syncing')
+        const idle = viewerCount(room.id) === 0 && (room.queue.length === 0 || !room.nativeSessions.some(n => n.status === 'syncing'))
         if (!idle) {
             emptySince.delete(room.id)
             continue

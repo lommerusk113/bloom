@@ -136,3 +136,13 @@ test('sweepRooms reports rooms whose item ended', () => {
     assert.deepEqual(advanced, [room])
     assert.equal(room.index, 1)
 })
+
+test('sweepRooms deletes an empty-queue room past the TTL even with a syncing native', () => {
+    const TTL = 30 * 60_000
+    const room = createRoom('r1', 0)
+    room.nativeSessions.push({ sessionId: 's', label: 'TV', device: 'TV', trusted: false, status: 'syncing' })
+    const rooms = new Map([[room.id, room]])
+    const emptySince = new Map<string, number>()
+    sweepRooms(rooms, () => 0, emptySince, 0)
+    assert.deepEqual(sweepRooms(rooms, () => 0, emptySince, TTL + 1).deleted, ['r1'])
+})

@@ -38,10 +38,12 @@ export type Track = {
     confirmed: boolean
     /** Consecutive polls without the session, e.g. while the client reconnects. */
     misses: number
+    /** Id of the room's item at the last step that had one; after the queue empties, the item to stop. */
+    itemId: string | null
 }
 
 export const newTrack = (): Track => ({
-    attempts: 0, lastCmdAt: 0, lastSeekAt: 0, lastKind: null, expect: null, lead: 0, pendingSeek: false, confirmed: true, misses: 0,
+    attempts: 0, lastCmdAt: 0, lastSeekAt: 0, lastKind: null, expect: null, lead: 0, pendingSeek: false, confirmed: true, misses: 0, itemId: null,
 })
 
 /** New seek lead after a seek landed `driftAfterSeek` seconds off the room (negative = behind). */
@@ -100,8 +102,9 @@ export function decide(s: JfSession | undefined, room: Room, t: Track, now: numb
     const cooling = (ms: number): boolean => now - t.lastCmdAt < ms && room.updatedAt <= t.lastCmdAt
     const item = room.queue[room.index]
     if (!item) {
-        // the queue emptied: stop a session still playing the removed item
-        if (believed(s, t, now).paused) {
+        // the queue emptied: stop a session still playing the removed item, leave anything else alone
+        const playingRemoved = t.itemId !== null && normalizeId(s.NowPlayingItem?.Id ?? '') === normalizeId(t.itemId)
+        if (!playingRemoved || believed(s, t, now).paused) {
             return { kind: 'none' }
         }
         return cooling(COMMAND_COOLDOWN_MS) ? { kind: 'wait' } : { kind: 'pause' }
@@ -182,6 +185,7 @@ export function createConductor(jf: Jellyfin, rooms: Map<string, Room>, onChange
         const key = `${room.id}:${ns.sessionId}`
         const t = tracks.get(key) ?? newTrack()
         tracks.set(key, t)
+        t.itemId = room.queue[room.index]?.id ?? t.itemId
 
         t.misses = s ? 0 : t.misses + 1
         if (t.misses > 0 && t.misses < MAX_MISSES) {

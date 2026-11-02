@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { adaptLead, createConductor, decide, newTrack, type Track } from '../src/conductor.ts'
 import { TICKS_PER_SECOND, type Jellyfin, type JfSession } from '../src/jellyfin.ts'
-import { createRoom, type Room } from '../src/room.ts'
+import { apply, createRoom, type Room } from '../src/room.ts'
 
 const NOW = Date.parse('2026-01-01T00:00:00Z')
 const ITEM = 'a'.repeat(32)
@@ -66,9 +66,24 @@ test('pause state mismatch is corrected', () => {
 
 test('an emptied queue pauses a playing session', () => {
     const r = room({ queue: [], index: 0, playing: false, position: 0, updatedAt: NOW - 20_000 })
-    assert.deepEqual(decide(session(100), r, track(), NOW), { kind: 'pause' })
-    assert.deepEqual(decide(session(100), r, track({ lastCmdAt: NOW - 1000, lastKind: 'pause' }), NOW), { kind: 'wait' })
-    assert.deepEqual(decide(session(100, { paused: true }), r, track(), NOW), { kind: 'none' })
+    assert.deepEqual(decide(session(100), r, track({ itemId: ITEM }), NOW), { kind: 'pause' })
+    assert.deepEqual(decide(session(100), r, track({ itemId: ITEM, lastCmdAt: NOW - 1000, lastKind: 'pause' }), NOW), { kind: 'wait' })
+    assert.deepEqual(decide(session(100, { paused: true }), r, track({ itemId: ITEM }), NOW), { kind: 'none' })
+})
+
+test('after the queue empties, a session playing another item is left alone', async () => {
+    const r = room()
+    let current = session(100, { checkIn: NOW })
+    const { conductor, calls } = setup(r, () => current)
+    await conductor.tick(NOW)
+    apply(r, { type: 'queueRemove', index: 0 }, true, NOW + 1000)
+    current = session(5, { item: OTHER, checkIn: NOW + 2000 })
+    await conductor.tick(NOW + 2000)
+    await conductor.tick(NOW + 10_000)
+    assert.deepEqual(calls, [])
+    current = session(5, { checkIn: NOW + 11_000 })
+    await conductor.tick(NOW + 11_000)
+    assert.deepEqual(calls, ['pause'])
 })
 
 test('drift over 3s seeks to the room position', () => {
