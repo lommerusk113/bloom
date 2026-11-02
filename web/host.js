@@ -125,7 +125,13 @@ function manage(room) {
     $('link').value = url
     $('open').href = url
     $('copy').onclick = async () => {
-        await navigator.clipboard.writeText(url)
+        if (navigator.clipboard) {
+            await navigator.clipboard.writeText(url)
+        } else {
+            // plain http on a LAN address is not a secure context: no Clipboard API
+            $('link').select()
+            document.execCommand('copy')
+        }
         $('copy').textContent = 'Copied ✓'
         setTimeout(() => { $('copy').textContent = 'Copy link' }, 1500)
     }
