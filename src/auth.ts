@@ -17,8 +17,13 @@ export function createAuth(password: string, secure: boolean) {
         /** A new session token, or null when the password is wrong or the ip is rate limited. */
         login(attempt: string, ip: string, now = Date.now()): string | null {
 
-            const previous = failures.get(ip)
-            const current = previous && now - previous.since <= WINDOW_MS ? previous : undefined
+            for (const [key, entry] of failures) {
+                if (now - entry.since > WINDOW_MS) {
+                    failures.delete(key)
+                }
+            }
+
+            const current = failures.get(ip)
             if (current && current.count >= MAX_FAILURES) {
                 return null
             }
@@ -32,6 +37,11 @@ export function createAuth(password: string, secure: boolean) {
             tokens.add(token)
 
             return token
+        },
+
+        /** Number of ips with failures inside the window. */
+        trackedIps(): number {
+            return failures.size
         },
 
         isHost(req: IncomingMessage): boolean {

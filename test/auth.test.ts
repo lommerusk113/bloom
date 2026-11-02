@@ -25,6 +25,15 @@ test('logins are blocked after 10 failures per ip for 15 minutes', () => {
     assert.ok(auth.login('secret', '2.2.2.2', 15 * 60_000 + 1))
 })
 
+test('expired failures are pruned on the next login', () => {
+    const auth = createAuth('secret', false)
+    auth.login('wrong', '4.4.4.4', 0)
+    auth.login('wrong', '5.5.5.5', 10 * 60_000)
+    assert.equal(auth.trackedIps(), 2)
+    auth.login('secret', '6.6.6.6', 15 * 60_000 + 1)
+    assert.equal(auth.trackedIps(), 1)
+})
+
 test('cookie is HttpOnly and SameSite=Strict, Secure on https', () => {
     assert.match(createAuth('x', true).cookie('t'), /HttpOnly; SameSite=Strict.*; Secure$/)
     assert.doesNotMatch(createAuth('x', false).cookie('t'), /Secure/)
