@@ -52,6 +52,13 @@ test('PlayNow is not re-sent within 15s', () => {
     assert.deepEqual(decide(s, r, track({ lastCmdAt: NOW - 16_000, lastKind: 'play' }), NOW), { kind: 'play' })
 })
 
+test('a landed PlayNow is corrected after the short cooldown', () => {
+    const r = room({ playing: false, updatedAt: NOW - 20_000 })
+    const t = track({ lastCmdAt: NOW - 4000, lastKind: 'play', confirmed: false, expect: { position: 100, paused: false, at: NOW - 4000 } })
+    assert.deepEqual(decide(session(103, { checkIn: NOW - 1000 }), r, t, NOW), { kind: 'pause' })
+    assert.deepEqual(decide(session(103, { checkIn: NOW - 1000 }), r, { ...t, lastCmdAt: NOW - 2000 }, NOW), { kind: 'wait' })
+})
+
 test('pause state mismatch is corrected', () => {
     assert.deepEqual(decide(session(100, { paused: true }), room(), track(), NOW), { kind: 'unpause' })
     assert.deepEqual(decide(session(100), room({ playing: false }), track(), NOW), { kind: 'pause' })

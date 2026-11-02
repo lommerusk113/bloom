@@ -99,21 +99,21 @@ export function decide(s: JfSession | undefined, room: Room, t: Track, now: numb
         return { kind: 'none' }
     }
 
-    const cooldown = t.lastKind === 'play' ? PLAY_COOLDOWN_MS : COMMAND_COOLDOWN_MS
-    const cooling = now - t.lastCmdAt < cooldown && room.updatedAt <= t.lastCmdAt
+    const cooling = (ms: number): boolean => now - t.lastCmdAt < ms && room.updatedAt <= t.lastCmdAt
     if (normalizeId(s.NowPlayingItem?.Id ?? '') !== normalizeId(item.id)) {
         // the session finished the item the room is ending too; relaunching it would replay the last seconds
         if (item.runtime > 0 && currentPosition(room, now) >= item.runtime - SEEK_THRESHOLD) {
             return { kind: 'none' }
         }
-        return cooling ? { kind: 'wait' } : { kind: 'play' }
+        return cooling(t.lastKind === 'play' ? PLAY_COOLDOWN_MS : COMMAND_COOLDOWN_MS) ? { kind: 'wait' } : { kind: 'play' }
     }
 
     const userCmd = detectUserAction(s, t, now)
     if (userCmd) {
         return { kind: 'user', cmd: userCmd }
     }
-    if (cooling) {
+    // once PlayNow landed, the long play cooldown is over: a paused room must not play on for 15s
+    if (cooling(COMMAND_COOLDOWN_MS)) {
         return { kind: 'wait' }
     }
 
