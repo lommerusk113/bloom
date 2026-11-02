@@ -1,6 +1,7 @@
 import { connectRoom } from './ws.js'
 import { decide, targetPosition } from './sync.js'
 import { deviceProfile, playbackInfo, proxied, subtitlePath, withDevice } from './playback.js'
+import { setupCast } from './cast.js'
 
 const $ = (id) => document.getElementById(id)
 const video = $('video')
@@ -43,6 +44,7 @@ $('join').onsubmit = (event) => {
     $('join').hidden = true
     $('player').hidden = false
     socket = connectRoom(roomId, name, onMessage)
+    cast = setupCast({ roomId, deviceId, getState: () => state })
     setInterval(syncNow, 1000)
 }
 

@@ -6,6 +6,8 @@
 <title>Watchparty</title>
 <link rel="stylesheet" href="/web/style.css">
 <script src="/vendor/hls.min.js"></script>
+<script>window.__onGCastApiAvailable = (available) => { window.__castAvailable = available }</script>
+<script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1" async></script>
 </head>
 <body>
 <form id="join" class="card">
@@ -34,6 +36,7 @@
             <option value="4000000">4 Mbps</option>
             <option value="1500000">1.5 Mbps</option>
         </select>
+        <google-cast-launcher aria-label="Cast"></google-cast-launcher>
         <button id="fullscreen" aria-label="Fullscreen">⛶</button>
     </div>
     <p id="info"></p>
