@@ -2,7 +2,7 @@
 
 Watch Jellyfin together. Guests join by link in a browser (or cast to a Chromecast); you can also join from native Jellyfin apps. Everyone stays in sync.
 
-Watchparty never encodes video itself. Guests get whatever Jellyfin would serve them (usually a cheap remux), so Jellyfin stays the only program using the GPU.
+Watchparty never encodes video itself. Every guest gets an HLS stream from Jellyfin (a cheap remux when the browser supports the codecs, a transcode otherwise), so Jellyfin stays the only program using the GPU.
 
 ## Requirements
 
@@ -41,9 +41,11 @@ Watchparty never encodes video itself. Guests get whatever Jellyfin would serve 
 1. Open `PUBLIC_URL`, log in, create a room, search and add things to the queue.
 2. Share the room link. Guests enter a name and watch.
 3. To watch on a TV or phone with the Jellyfin app: open the app on that device (logged in as anyone), then on the host page pick it under **Native Jellyfin devices** and click **Add**. Tick **My device** for your own devices so they can always control playback.
-4. **Guests can control playback** decides whether guests (and untrusted native devices) may pause, seek or skip.
+4. **Guests can control playback** decides whether guests and untrusted native devices may pause, seek or skip. Devices ticked **My device** may always control playback.
 
-Native apps sync to within about 2 seconds (they report their position rarely); browsers within about 0.3 seconds.
+Native apps sync to within about 3 seconds (they report their position rarely); browsers within about 0.3 seconds.
+
+Each room allows 24 active streams; a stream that makes no requests for 2 minutes stops counting. Each websocket client may send 20 messages per second; extra messages are dropped and a client that keeps flooding for 5 seconds is disconnected.
 
 ## Development
 
