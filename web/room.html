@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watchparty</title>
+<link rel="stylesheet" href="/web/style.css">
+<script src="/vendor/hls.min.js"></script>
+</head>
+<body>
+<form id="join" class="card">
+    <h1>Join the watch party</h1>
+    <input id="name" placeholder="Your name" maxlength="32" required autofocus>
+    <button>Join</button>
+</form>
+
+<main id="player" hidden>
+    <div class="stage">
+        <video id="video" playsinline></video>
+        <button id="tap" hidden>▶ Tap to start</button>
+        <p id="status"></p>
+    </div>
+    <div class="controls">
+        <button id="toggle" aria-label="Play or pause">▶</button>
+        <input id="seek" type="range" min="0" max="0" step="1" value="0" aria-label="Seek">
+        <span id="time">0:00 / 0:00</span>
+        <button id="next" aria-label="Next item">⏭</button>
+        <select id="audio" aria-label="Audio track"></select>
+        <select id="subs" aria-label="Subtitles"></select>
+        <select id="quality" aria-label="Quality">
+            <option value="">Original</option>
+            <option value="20000000">20 Mbps</option>
+            <option value="8000000">8 Mbps</option>
+            <option value="4000000">4 Mbps</option>
+            <option value="1500000">1.5 Mbps</option>
+        </select>
+        <button id="fullscreen" aria-label="Fullscreen">⛶</button>
+    </div>
+    <p id="info"></p>
+</main>
+<script type="module" src="/web/room.js"></script>
+</body>
+</html>
