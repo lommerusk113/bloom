@@ -191,6 +191,8 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
     set.add(client)
     alive.add(ws)
     ws.on('pong', () => alive.add(ws))
+    // oversized or malformed frames emit 'error'; unhandled it would crash the process
+    ws.on('error', () => ws.terminate())
     ws.send(JSON.stringify({ type: 'welcome', isHost }))
     broadcast(room)
 

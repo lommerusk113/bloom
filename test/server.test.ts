@@ -104,3 +104,13 @@ test('room sockets share state and know who is host', async () => {
     host.close()
     guest.close()
 })
+
+test('an oversized websocket frame drops only that client', async () => {
+    const cookie = await login()
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`)
+    await once(ws, 'open')
+    ws.send('x'.repeat(70_000))
+    await once(ws, 'close')
+    assert.equal((await fetch(`${BASE}/api/health`)).status, 200)
+})
