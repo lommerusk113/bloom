@@ -83,6 +83,10 @@ test('room sockets share state and know who is host', async () => {
     const evil = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`, { origin: 'https://evil.example' })
     await assert.rejects(once(evil, 'open'))
 
+    const proxied = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`, { origin: BASE, headers: { host: 'internal:8080' } })
+    await once(proxied, 'open')
+    proxied.close()
+
     const host = openSocket(id, cookie, BASE)
     const guest = openSocket(id)
     await Promise.all([host.ready, guest.ready])

@@ -24,6 +24,7 @@ const CONTENT_TYPES: Record<string, string> = {
 
 const PORT = Number(process.env.PORT ?? 8080)
 const PUBLIC_URL = process.env.PUBLIC_URL ?? `http://localhost:${PORT}`
+const PUBLIC_HOST = new URL(PUBLIC_URL).host
 const jf = createJellyfin(required('JELLYFIN_URL').replace(/\/$/, ''), required('JELLYFIN_API_KEY'))
 const auth = createAuth(required('HOST_PASSWORD'), PUBLIC_URL.startsWith('https:'))
 
@@ -177,7 +178,9 @@ server.on('upgrade', (req, socket, head) => {
         const room = match ? rooms.get(match[1]) : undefined
         // cross-site websocket hijacking: browsers always send Origin, so a foreign one means another site's page
         const origin = req.headers.origin
-        if (!room || (origin !== undefined && URL.parse(origin)?.host !== req.headers.host)) {
+        // a reverse proxy may rewrite Host, so PUBLIC_URL's host counts as same-site too
+        const originHost = origin === undefined ? undefined : URL.parse(origin)?.host
+        if (!room || (origin !== undefined && originHost !== req.headers.host && originHost !== PUBLIC_HOST)) {
             socket.destroy()
             return
         }
