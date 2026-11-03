@@ -44,6 +44,11 @@ export async function stopRoomStreams(room: Room, jf: Jellyfin, now = Date.now()
         jf.raw(`/Videos/ActiveEncodings?${new URLSearchParams({ DeviceId: id, PlaySessionId: id })}`, { method: 'DELETE' })))
 }
 
+/** Number of the room's streams used within SESSION_IDLE_MS, for the admin dashboard. */
+export function activeStreams(room: Room, now = Date.now()): number {
+    return [...(sessions.get(room)?.values() ?? [])].filter(seen => now - seen <= SESSION_IDLE_MS).length
+}
+
 /** The normalized item id an allowed path refers to, or null when the path is not allowed. */
 export function allowedItemId(method: string, path: string): string | null {
     for (const [allowedMethod, pattern] of ALLOWED) {

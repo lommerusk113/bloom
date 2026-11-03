@@ -76,11 +76,20 @@ video { width: 100%; height: 100%; object-fit: contain; display: block; }
 .osd-progress { display: flex; align-items: center; gap: 12px; }
 .osd-time { font-variant-numeric: tabular-nums; font-size: .9em; color: #ddd; min-width: 3.5em; }
 .osd-time:last-child { text-align: right; }
-#seek { flex: 1; appearance: none; height: 4px; padding: 0; border: none; border-radius: 2px; cursor: pointer;
+#seek, #volume { flex: 1; appearance: none; height: 4px; padding: 0; border: none; border-radius: 2px; cursor: pointer;
     background: linear-gradient(to right, var(--accent) var(--pct, 0%), rgb(255 255 255 / .3) var(--pct, 0%)); }
-#seek:hover { height: 6px; }
-#seek::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: none; }
-#seek::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: none; }
+#seek:hover, #volume:hover { height: 6px; }
+#seek::-webkit-slider-thumb, #volume::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: none; }
+#seek::-moz-range-thumb, #volume::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: none; }
+.volume { display: flex; align-items: center; }
+#volume { width: 90px; flex: none; }
+.osd-back { flex: none; padding: 6px 12px; border-radius: 999px; background: rgb(255 255 255 / .12); color: #fff; text-decoration: none; font-size: .9em; }
+.osd-back:hover { background: rgb(255 255 255 / .22); }
+.osd-panel { max-height: calc(100vh - 130px); overflow-y: auto; max-width: min(380px, calc(100vw - 24px)); }
+.sub-search { display: grid; gap: 6px; }
+.sub-search .row { display: flex; gap: 6px; }
+.sub-results { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 220px; overflow-y: auto; font-size: .85em; color: #bbb; }
+.sub-result { width: 100%; text-align: left; padding: 6px 8px; font-size: 1em; white-space: normal; overflow-wrap: anywhere; }
 #seek:disabled { cursor: default; opacity: .6; }
 .osd-buttons { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; }
 .osd-group { display: flex; align-items: center; gap: 4px; }
@@ -96,6 +105,7 @@ google-cast-launcher { display: inline-block; width: 26px; height: 26px; margin:
     .osd-top, .osd-bottom { padding-left: 12px; padding-right: 12px; }
     button.icon { width: 38px; height: 38px; }
     .osd-panel { right: 12px; left: 12px; }
+    #volume { display: none; }
 }
 
 .tabs { display: flex; gap: 4px; padding: 3px; background: var(--raised); border-radius: 10px; }
@@ -229,3 +239,23 @@ h2.shelf-title { margin: 0 auto 0 0; }
 .brand-title img { width: 36px; height: 36px; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--text) !important; font-size: 1.1em; }
 .brand img { width: 28px; height: 28px; }
+
+.stack { display: grid; gap: 8px; }
+.menu-panel { z-index: 10; display: grid; gap: 8px; min-width: 240px; }
+
+/* admin dashboard */
+.admin { max-width: 1200px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.stat { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; }
+.stat-value { font-size: 1.6em; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-label { color: var(--muted); font-size: .85em; }
+.stat.bad .stat-value { color: var(--error); }
+.table-wrap { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: .92em; }
+.table th { text-align: left; font-weight: 600; color: var(--muted); font-size: .85em; }
+.table th, .table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.table td .row { flex-wrap: nowrap; }
+.table button { padding: 4px 10px; font-size: .9em; }
+.tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .8em; background: var(--raised); border: 1px solid var(--border); }
+.tag.on { border-color: var(--accent); color: var(--accent); }
+.tag.off { color: var(--error); }

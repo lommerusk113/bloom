@@ -43,3 +43,13 @@ export function adaptLead(lead, driftAfterSeek) {
 export function nextBackoff(previousMs, min, max) {
     return previousMs ? Math.min(previousMs * 2, max) : min
 }
+
+export const MAX_JOIN_LEAD = 30
+
+/**
+ * Seconds ahead of the room a viewer who joins (or reloads for their own setting) starts loading,
+ * so they buffer alone instead of holding everyone: transcode startup plus two 6s segments at their speed.
+ */
+export function joinLead(bitrate, speed) {
+    return Math.min(Math.max(3 + (bitrate * 12) / speed, 4), MAX_JOIN_LEAD)
+}

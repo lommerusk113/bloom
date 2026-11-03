@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin · Bloom</title>
+<link rel="icon" href="/web/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+<main class="admin">
+    <header class="top">
+        <h1 class="brand-title"><img src="/web/logo.svg" alt=""> Bloom admin</h1>
+        <a class="button" href="/">‹ My rooms</a>
+    </header>
+    <p id="error" class="banner error" hidden></p>
+
+    <section id="stats" class="stats"></section>
+
+    <section class="panel">
+        <h2>Rooms</h2>
+        <div class="table-wrap">
+            <table class="table">
+                <thead><tr><th>Room</th><th>Host</th><th>Playing</th><th>Watching (speed)</th><th>Streams</th><th></th></tr></thead>
+                <tbody id="rooms"></tbody>
+            </table>
+        </div>
+        <p id="noRooms" class="empty" hidden>No rooms open.</p>
+    </section>
+
+    <section class="panel">
+        <h2>Users</h2>
+        <div class="table-wrap">
+            <table class="table">
+                <thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Rooms</th><th>Last login</th><th>Created</th><th></th></tr></thead>
+                <tbody id="users"></tbody>
+            </table>
+        </div>
+        <h3>New user</h3>
+        <form id="create" class="row">
+            <input id="newName" placeholder="Username" autocomplete="off" required maxlength="32">
+            <input id="newPassword" type="text" placeholder="Password (6+ characters)" autocomplete="off" required minlength="6">
+            <label class="check"><input id="newAdmin" type="checkbox"> Admin</label>
+            <button class="primary">Create</button>
+        </form>
+        <p id="createNote" class="muted small"></p>
+    </section>
+</main>
+<script type="module" src="/web/admin.js"></script>
+</body>
+</html>

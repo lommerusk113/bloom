@@ -7,14 +7,19 @@ services:
     environment:
       JELLYFIN_URL: ${JELLYFIN_URL:-http://jellyfin:8096}
       JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:?set in .env}
-      HOST_PASSWORD: ${HOST_PASSWORD:?set in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?first admin account password (username admin), set in .env}
       PUBLIC_URL: ${PUBLIC_URL:?your external URL, e.g. https://watch.example.com}
       JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
     # localhost only: reach it through your reverse proxy
     ports:
       - "127.0.0.1:8080:8080"
-    # nothing is written to disk; all state lives in memory
+    # accounts live in the volume; everything else in memory
+    volumes:
+      - bloom-data:/data
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+
+volumes:
+  bloom-data:

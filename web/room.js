@@ -1,12 +1,12 @@
 import { connectRoom } from './ws.js'
-import { adaptLead, decide, nextBackoff, targetPosition } from './sync.js'
+import { adaptLead, decide, joinLead, nextBackoff, targetPosition } from './sync.js'
 import { deviceProfile, playbackInfo, proxied, stopStream, subtitlePath } from './playback.js'
 import { setupCast } from './cast.js'
 
 const $ = (id) => document.getElementById(id)
 const video = $('video')
 const roomId = location.pathname.split('/')[2]
-const prefs = { audio: null, subs: null, bitrate: null } // per viewer; audio/subs reset per item
+const prefs = { audio: null, subs: null } // per viewer, reset per item
 
 let socket = null
 let cast = null
@@ -24,7 +24,11 @@ let pendingSeek = false // a seek while playing whose landing drift hasn't been 
 let lastSeekedAt = 0
 let stalled = false     // buffering: currentTime frozen while not seeking
 let myName = ''
-let personal = false // reloading for this viewer's own audio/subtitle/quality pick: catch up alone, don't hold the room
+let personal = false // loading for this viewer alone (joining, own audio/subtitle/quality pick): don't hold the room
+let loadedOnce = false
+let catchUp = null    // { at, lead }: loading ahead of the room alone; starts playing when the room reaches `at`
+let speedMbps = null  // measured download speed from the server
+let speedTest = Promise.resolve()
 
 function recall(key) {
     try {
@@ -84,6 +88,7 @@ async function join() {
     $('player').hidden = false
     video.play().catch(() => {}) // user gesture: unlocks later programmatic play() on iOS
     socket = connectRoom(roomId, name, onMessage)
+    speedTest = measureSpeed()
     cast = setupCast({ roomId, deviceId, getState: () => state })
     setInterval(syncNow, 1000)
 }
@@ -92,7 +97,11 @@ function onMessage(msg) {
     if (msg.type === 'welcome') {
         isHost = msg.isHost
         reportedBuffering = false // a new connection starts out not buffering on the server
-        $('endRoom').hidden = !isHost
+        if (speedMbps !== null) {
+            socket.send({ type: 'speed', value: speedMbps })
+        }
+        $('manage').hidden = !isHost
+        $('manage').href = `/?room=${roomId}`
         $('status').textContent = ''
         return
     }
@@ -109,7 +118,7 @@ function onMessage(msg) {
         state = null // syncNow stops driving the player and Chromecast
         cast?.stop()
         unloadStream()
-        $('endRoom').hidden = true
+        $('manage').hidden = true
         for (const id of CONTROLS) {
             $(id).disabled = true // their handlers read state
         }
@@ -127,10 +136,10 @@ function onMessage(msg) {
         $('status').textContent = ''
     }
     if (item && current?.itemId !== item.id) {
-        personal = false // a new item: everyone loads, the room waits
+        // joining: load ahead alone; a new item: everyone loads from the start and the room waits
         prefs.audio = null
         prefs.subs = null
-        load(item.id)
+        load(item.id, !loadedOnce)
     }
     render()
     syncNow()
@@ -166,8 +175,12 @@ function currentTarget() {
     return Math.min(targetPosition(state.room, socket.serverNow()), item?.runtime || Infinity)
 }
 
-async function load(itemId) {
+/** solo: only this viewer reloads (joining, own setting change), so it loads ahead of the room instead of holding it. */
+async function load(itemId, solo = false) {
     const token = ++loadToken
+    loadedOnce = true
+    personal = solo
+    catchUp = null
     const subs = subtitleParam()
     if (current?.source) {
         hls?.destroy() // its segment requests would fail once the transcode is stopped
@@ -180,12 +193,21 @@ async function load(itemId) {
     current = { itemId, source: null, last: current?.itemId === itemId ? (current.source ?? current.last) : null }
     try {
         const known = current.last // this item's previous source: its Id makes Jellyfin honour the audio/subtitle pick
-        const source = await playbackInfo(roomId, itemId, deviceProfile(video, safeItem === itemId), { deviceId, audio: prefs.audio, subs, bitrate: prefs.bitrate, mediaSourceId: known?.Id ?? null })
+        await speedTest // its result picks the Auto quality and how far ahead to start
+        if (token !== loadToken) {
+            return
+        }
+        const source = await playbackInfo(roomId, itemId, deviceProfile(video, safeItem === itemId), { deviceId, audio: prefs.audio, subs, bitrate: bitrate(), mediaSourceId: known?.Id ?? null })
         if (token !== loadToken) {
             stopStream(roomId, source.TranscodingUrl) // superseded: don't leak its transcode
             return
         }
         current = { itemId, source }
+        const room = state?.room
+        if (solo && room?.playing && !room.waiting && !cast?.active()) {
+            const lead = joinLead(Math.min(source.Bitrate || 8e6, bitrate() ?? Infinity), (speedMbps ?? 10) * 1e6)
+            catchUp = { at: currentTarget() + lead, lead }
+        }
         prefs.audio ??= source.DefaultAudioStreamIndex ?? null
         prefs.subs ??= source.DefaultSubtitleStreamIndex ?? -1
         attach(proxied(roomId, source.TranscodingUrl))
@@ -208,7 +230,7 @@ function retryLoad(token, itemId, message) {
     $('status').textContent = `${message} – retrying in ${delay / 1000}s…`
     setTimeout(() => {
         if (token === loadToken) {
-            load(itemId)
+            load(itemId, personal)
         }
     }, delay)
 }
@@ -220,7 +242,7 @@ addEventListener('pagehide', () => {
 })
 addEventListener('pageshow', (event) => {
     if (event.persisted && current) {
-        load(current.itemId) // restored from the back/forward cache: pagehide stopped the stream
+        load(current.itemId, true) // restored from the back/forward cache: pagehide stopped the stream
     }
 })
 
@@ -231,7 +253,7 @@ function attach(src) {
     mediaErrors = 0
     if (window.Hls?.isSupported()) {
         const token = loadToken
-        hls = new Hls({ startPosition: currentTarget() })
+        hls = new Hls({ startPosition: catchUp?.at ?? currentTarget() })
         hls.on(Hls.Events.ERROR, (_, data) => {
             if (!data.fatal || token !== loadToken) {
                 return
@@ -259,7 +281,7 @@ function recoverMedia() {
         hls.recoverMediaError()
     } else if (safeItem !== current.itemId) {
         safeItem = current.itemId
-        load(current.itemId)
+        load(current.itemId, true)
     } else {
         hls.destroy()
         hls = null
@@ -309,8 +331,7 @@ $('audio').onchange = () => {
         return // stream unloaded (empty queue or room gone)
     }
     prefs.audio = Number($('audio').value)
-    personal = true
-    load(current.itemId)
+    reloadAlone()
 }
 $('subs').onchange = () => {
     if (!current) {
@@ -320,17 +341,55 @@ $('subs').onchange = () => {
     prefs.subs = Number($('subs').value)
     const source = current.source ?? current.last
     if (isImageSub(source, previous) || isImageSub(source, prefs.subs)) {
-        personal = true
-        load(current.itemId)
+        reloadAlone()
     } else {
         showSubtitles()
     }
 }
+$('quality').value = recall('wp_quality') ?? 'auto'
 $('quality').onchange = () => {
-    prefs.bitrate = Number($('quality').value) || null
+    store('wp_quality', $('quality').value)
     if (current) {
-        personal = true
-        load(current.itemId)
+        reloadAlone()
+    }
+}
+
+/** Reloads the stream for this viewer's own setting, re-measuring their speed first. */
+function reloadAlone() {
+    speedTest = measureSpeed()
+    load(current.itemId, true)
+}
+
+/** Max bitrate to ask Jellyfin for: the picked quality, or for Auto 70% of the measured speed. null: the original. */
+function bitrate() {
+    const picked = $('quality').value
+    if (picked !== 'auto') {
+        return Number(picked) || null
+    }
+    // Jellyfin takes an int32: a fast LAN would overflow it
+    return speedMbps === null ? null : Math.min(Math.max(1_500_000, Math.round(speedMbps * 700_000)), 120_000_000)
+}
+
+/** Times a download from the server for up to 3s; reports the speed to the room for the admin dashboard. */
+async function measureSpeed() {
+    try {
+        const started = performance.now()
+        const res = await fetch(`/r/${roomId}/speedtest`, { cache: 'no-store' })
+        const reader = res.body.getReader()
+        let bytes = 0
+        while (performance.now() - started < 3000) {
+            const { done, value } = await reader.read()
+            if (done) {
+                break
+            }
+            bytes += value.length
+        }
+        reader.cancel().catch(() => {})
+        speedMbps = Math.round((bytes * 8) / ((performance.now() - started) / 1000) / 100_000) / 10
+        socket.send({ type: 'speed', value: speedMbps })
+        $('speed').textContent = `Your connection: ${speedMbps} Mbps`
+    } catch {
+        $('speed').textContent = '' // unknown speed: Auto plays the original
     }
 }
 
@@ -377,15 +436,81 @@ function wake() {
 for (const type of ['mousemove', 'touchstart', 'keydown', 'click']) {
     document.addEventListener(type, wake, { passive: true })
 }
-$('endRoom').onclick = async () => {
-    if (!confirm('End the room for everyone?')) {
+
+// volume is per viewer and remembered
+video.volume = Math.min(Math.max(Number(recall('wp_volume') ?? 1) || 0, 0), 1)
+const VOLUME_ICON = 'M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z'
+const MUTED_ICON = 'M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0 0 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z'
+function showVolume() {
+    const silent = video.muted || video.volume === 0
+    $('volume').value = String(video.muted ? 0 : video.volume)
+    $('volume').style.setProperty('--pct', `${(video.muted ? 0 : video.volume) * 100}%`)
+    $('mute').querySelector('path').setAttribute('d', silent ? MUTED_ICON : VOLUME_ICON)
+}
+video.addEventListener('volumechange', showVolume)
+showVolume()
+$('volume').oninput = () => {
+    video.volume = Number($('volume').value)
+    video.muted = video.volume === 0
+    store('wp_volume', String(video.volume))
+}
+$('mute').onclick = () => {
+    if (video.volume === 0) {
+        video.volume = 1
+    }
+    video.muted = !video.muted
+}
+
+// --- more subtitles, through Jellyfin's subtitle plugins (OpenSubtitles) ---
+
+const LANGUAGES = { eng: 'English', nor: 'Norwegian', swe: 'Swedish', dan: 'Danish', fin: 'Finnish', ger: 'German', fre: 'French', spa: 'Spanish', ita: 'Italian', dut: 'Dutch', por: 'Portuguese', pol: 'Polish', jpn: 'Japanese', kor: 'Korean', chi: 'Chinese' }
+const BROWSER_LANGUAGES = { en: 'eng', nb: 'nor', nn: 'nor', no: 'nor', sv: 'swe', da: 'dan', fi: 'fin', de: 'ger', fr: 'fre', es: 'spa', it: 'ita', nl: 'dut', pt: 'por', pl: 'pol', ja: 'jpn', ko: 'kor', zh: 'chi' }
+fill($('subLang'), Object.entries(LANGUAGES), recall('wp_sub_lang') ?? BROWSER_LANGUAGES[navigator.language.slice(0, 2)] ?? 'eng')
+$('findSubs').onclick = () => {
+    $('subSearch').hidden = !$('subSearch').hidden
+}
+$('subSearch').onsubmit = async (event) => {
+    event.preventDefault()
+    const lang = $('subLang').value
+    store('wp_sub_lang', lang)
+    $('subResults').replaceChildren(new Option('Searching…'))
+    const res = await fetch(`/r/${roomId}/subtitles?lang=${lang}`).catch(() => null)
+    const found = res?.ok ? await res.json() : null
+    if (!found?.length) {
+        const why = found ? 'Nothing found.' : 'Search failed.'
+        $('subResults').replaceChildren(listItem(`${why} Subtitle search needs the OpenSubtitles plugin in Jellyfin.`))
         return
     }
-    // the server then closes every socket with 4404, which shows this page as gone
-    const res = await fetch(`/api/rooms/${roomId}`, { method: 'DELETE' }).catch(() => null)
-    if (!res?.ok) {
-        $('status').textContent = 'Could not end the room'
+    $('subResults').replaceChildren(...found.slice(0, 30).map((sub) => {
+        const pick = document.createElement('button')
+        pick.className = 'sub-result'
+        pick.textContent = sub.name
+        pick.title = `${sub.provider} · ${sub.format} · ${sub.downloads} downloads${sub.exact ? ' · exact match' : ''}`
+        pick.onclick = () => downloadSubtitle(sub, pick)
+        return listItem('', pick)
+    }))
+}
+
+function listItem(text, ...children) {
+    const li = document.createElement('li')
+    li.textContent = text
+    li.append(...children)
+    return li
+}
+
+async function downloadSubtitle(sub, pick) {
+    pick.disabled = true
+    pick.textContent = 'Downloading…'
+    const res = await fetch(`/r/${roomId}/subtitles`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: sub.id }) }).catch(() => null)
+    const body = await res?.json().catch(() => ({}))
+    if (!res?.ok || !current) {
+        pick.textContent = body?.error ?? 'Download failed'
+        return
     }
+    pick.textContent = `✓ ${sub.name}`
+    $('subSearch').hidden = true
+    prefs.subs = body.index // the stream list only shows it after a reload
+    reloadAlone()
 }
 $('seek').oninput = () => {
     dragging = true
@@ -432,7 +557,7 @@ function render() {
     $('toggle').querySelector('path').setAttribute('d', room.playing ? PAUSE_ICON : PLAY_ICON)
     $('seek').max = String(Math.floor(item?.runtime ?? 0))
     $('title').textContent = item?.name ?? 'Waiting for the host to pick something…'
-    document.title = item ? `${item.name} · Bloom` : 'Bloom'
+    document.title = `${room.name} · Bloom`
     $('lock').hidden = canControl
     const chip = (text, title = '') => {
         const span = document.createElement('span')
@@ -462,7 +587,7 @@ video.addEventListener('error', () => {
         const mediaError = code === MediaError.MEDIA_ERR_DECODE || code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
         if (mediaError && safeItem !== current.itemId) {
             safeItem = current.itemId
-            load(current.itemId)
+            load(current.itemId, true)
         } else if (mediaError) {
             stopStream(roomId, current.source.TranscodingUrl)
             $('status').textContent = 'This video can’t be played in this browser'
@@ -487,7 +612,7 @@ let reportedBuffering = false
 /** Tells the room this player is loading, so it waits instead of running ahead. */
 function reportBuffering(loading) {
     $('spinner').hidden = !loading
-    const buffering = loading && !personal
+    const buffering = loading && !personal && !catchUp
     if (buffering !== reportedBuffering) {
         reportedBuffering = buffering
         socket.send({ type: 'buffering', value: buffering })
@@ -507,7 +632,7 @@ function syncNow() {
     const waitingFor = state.waitingFor.filter(name => name !== myName)
     $('wait').textContent = room.waiting ? `Waiting for ${waitingFor.join(', ') || 'you'} to load…` : ''
     // the counter shows this player's own position, so it stops while it loads
-    const position = local && !video.seeking ? video.currentTime : target
+    const position = local && !video.seeking && !catchUp ? video.currentTime : target
     if (!dragging) {
         $('seek').value = String(Math.floor(position))
     }
@@ -521,6 +646,9 @@ function syncNow() {
             video.pause()
         }
         cast.sync(target)
+        return
+    }
+    if (catchUp && waitForRoom(playing, target)) {
         return
     }
     if (!current?.source || video.readyState === 0 || video.seeking) {
@@ -550,4 +678,32 @@ function syncNow() {
         pendingSeek = far
     }
     video.playbackRate = d.action === 'rate' ? d.rate : 1
+}
+
+/**
+ * While loading ahead alone: hold paused at catchUp.at until the room gets there; true while still holding.
+ * Not loaded in time: aim further ahead. The room paused or seeked back: plain sync again.
+ */
+function waitForRoom(playing, target) {
+    const ready = current?.source && video.readyState >= 3 && !video.seeking
+    if (!playing || target < catchUp.at - catchUp.lead - 5) {
+        catchUp = null
+        return false
+    }
+    if (target >= catchUp.at) {
+        if (ready) {
+            catchUp = null
+            return false
+        }
+        catchUp.lead = Math.min(catchUp.lead * 1.5, 60)
+        catchUp.at = target + catchUp.lead
+    }
+    $('wait').textContent = `Joining in ${Math.ceil(catchUp.at - target)}s…`
+    if (!video.paused) {
+        video.pause()
+    }
+    if (current?.source && video.readyState > 0 && !video.seeking && Math.abs(video.currentTime - catchUp.at) > 1) {
+        video.currentTime = catchUp.at
+    }
+    return true
 }

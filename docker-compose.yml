@@ -11,7 +11,7 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-${SERVICE_FQDN_BLOOM_8080}}
       JELLYFIN_URL: ${JELLYFIN_URL:?Jellyfin address, e.g. http://jellyfin:8096}
       JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:?Jellyfin Dashboard > API Keys}
-      HOST_PASSWORD: ${HOST_PASSWORD:?Password for the host page}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Password (6+ characters) for the first admin account, username admin; only used on first start}
       JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
     # for a proxy outside Docker (Pangolin's Newt, nginx): http://<server>:HOST_PORT
@@ -22,7 +22,12 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    # nothing is written to disk; all state lives in memory
+    # accounts live in the volume; everything else in memory
+    volumes:
+      - bloom-data:/data
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+
+volumes:
+  bloom-data:

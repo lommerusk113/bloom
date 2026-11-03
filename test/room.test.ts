@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { setWaiting, advanceIfEnded, apply, createRoom, currentPosition, parseCommand, sweepRooms, type QueueItem, type Room } from '../src/room.ts'
+import { setWaiting, advanceIfEnded, apply, createRoom, currentPosition, parseCommand, sweepRooms, ROOM_TTL_MS, type QueueItem, type Room } from '../src/room.ts'
 
 const A: QueueItem = { id: 'a'.repeat(32), name: 'A', runtime: 100 }
 const B: QueueItem = { id: 'b'.repeat(32), name: 'B', runtime: 200 }
@@ -100,8 +100,8 @@ test('parseCommand accepts valid wire commands only', () => {
     assert.equal(parseCommand(null), null)
 })
 
-test('sweepRooms deletes rooms without viewers past the TTL', () => {
-    const TTL = 30 * 60_000
+test('sweepRooms deletes rooms empty for 5 minutes', () => {
+    const TTL = ROOM_TTL_MS
     const rooms = new Map<string, Room>()
     const lonely = roomWith()
     lonely.id = 'lonely'

@@ -14,8 +14,9 @@
     <section id="login" class="card" hidden>
         <h1 class="brand-title"><img src="/web/logo.svg" alt=""> Bloom</h1>
         <p class="muted">Watch Jellyfin together. Log in to create a room and pick something.</p>
-        <form id="loginForm" class="row">
-            <input id="password" type="password" placeholder="Host password" required autofocus>
+        <form id="loginForm" class="stack">
+            <input id="username" placeholder="Username" autocomplete="username" required autofocus>
+            <input id="password" type="password" placeholder="Password" autocomplete="current-password" required>
             <button class="primary">Log in</button>
         </form>
         <p id="loginError" class="error"></p>
@@ -24,9 +25,25 @@
     <section id="lobby" hidden>
         <header class="top">
             <h1 class="brand-title"><img src="/web/logo.svg" alt=""> Bloom</h1>
-            <button id="newRoom" class="primary">+ New room</button>
+            <div class="row">
+                <a id="adminLink" class="button" href="/admin" hidden>Admin</a>
+                <details class="menu">
+                    <summary id="account" aria-label="Account"></summary>
+                    <div class="menu-panel">
+                        <form id="passwordChange" class="stack">
+                            <strong>Change password</strong>
+                            <input id="currentPassword" type="password" placeholder="Current password" autocomplete="current-password" required>
+                            <input id="newPassword" type="password" placeholder="New password (6+ characters)" autocomplete="new-password" minlength="6" required>
+                            <button class="primary">Change</button>
+                            <p id="passwordChangeNote" class="muted small"></p>
+                        </form>
+                        <button id="logout">Log out</button>
+                    </div>
+                </details>
+                <button id="newRoom" class="primary">+ New room</button>
+            </div>
         </header>
-        <p class="muted">A room is one shared screen: everyone in it watches the same thing at the same moment.</p>
+        <p class="muted">A room is one shared screen: everyone in it watches the same thing at the same moment. Rooms nobody is in close after 5 minutes.</p>
         <ul id="rooms" class="list"></ul>
         <p id="noRooms" class="empty" hidden>No rooms yet. Create one to get a link you can share.</p>
     </section>

@@ -62,7 +62,7 @@ function clock(seconds) {
 $('loginForm').onsubmit = async (event) => {
     event.preventDefault()
     try {
-        await postJson('/api/login', { password: $('password').value })
+        await postJson('/api/login', { username: $('username').value, password: $('password').value })
         location.reload()
     } catch (err) {
         $('loginError').textContent = err.message
@@ -73,10 +73,11 @@ async function start() {
     const me = await api('/api/me')
     $('jfError').textContent = me.jellyfinError ?? ''
     $('jfError').hidden = !me.jellyfinError
-    if (!me.host) {
+    if (!me.user) {
         $('login').hidden = false
         return
     }
+    account(me.user)
     const rooms = await api('/api/rooms')
     const room = rooms.find(r => r.id === roomId)
     if (room) {
@@ -90,7 +91,7 @@ function lobby(rooms) {
     $('lobby').hidden = false
     $('noRooms').hidden = rooms.length > 0
     $('rooms').replaceChildren(...rooms.map((r) => {
-        const a = el('a', 'grow', r.title)
+        const a = el('a', 'grow', r.name)
         a.href = `/?room=${r.id}`
         const item = el('li')
         item.append(a, el('span', 'muted', `${r.viewers} connected`))
@@ -99,6 +100,25 @@ function lobby(rooms) {
     $('newRoom').onclick = async () => {
         const { id } = await api('/api/rooms', { method: 'POST' })
         location.search = `?room=${id}`
+    }
+}
+
+function account(user) {
+    $('account').textContent = `${user.name} ▾`
+    $('adminLink').hidden = !user.admin
+    $('logout').onclick = async () => {
+        await postJson('/api/logout', {}).catch(() => {})
+        location.href = '/'
+    }
+    $('passwordChange').onsubmit = async (event) => {
+        event.preventDefault()
+        try {
+            await postJson('/api/me/password', { current: $('currentPassword').value, password: $('newPassword').value })
+            $('passwordChange').reset()
+            $('passwordChangeNote').textContent = 'Password changed ✓'
+        } catch (err) {
+            $('passwordChangeNote').textContent = err.message
+        }
     }
 }
 

@@ -146,11 +146,32 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
             return tmdbIndex.map
         },
 
+        /** Subtitles Jellyfin's subtitle plugins (e.g. OpenSubtitles) offer for an item; lang is ISO 639-2, e.g. "eng". */
+        async remoteSubtitles(itemId: string, lang: string): Promise<RemoteSubtitle[]> {
+            const found = await json<Array<{ Id: string; Name?: string; ProviderName?: string; Format?: string; DownloadCount?: number; IsHashMatch?: boolean }>>(
+                `/Items/${encodeURIComponent(itemId)}/RemoteSearch/Subtitles/${encodeURIComponent(lang)}`)
+            return found.map(s => ({ id: s.Id, name: s.Name ?? s.Id, provider: s.ProviderName ?? '', format: s.Format ?? '', downloads: s.DownloadCount ?? 0, exact: s.IsHashMatch === true }))
+        },
+
+        /** Has Jellyfin download a remote subtitle next to the item, adding it as a subtitle stream. */
+        async downloadSubtitle(itemId: string, subtitleId: string): Promise<void> {
+            await json(`/Items/${encodeURIComponent(itemId)}/RemoteSearch/Subtitles/${encodeURIComponent(subtitleId)}`, { method: 'POST' })
+        },
+
+        /** Indexes of the item's subtitle streams. */
+        async subtitleIndexes(itemId: string): Promise<number[]> {
+            const item = (await listItems(new URLSearchParams({ Ids: itemId, Fields: 'MediaStreams' }))).Items[0] as JfItem & { MediaStreams?: Array<{ Type: string; Index: number }> }
+            return (item?.MediaStreams ?? []).filter(s => s.Type === 'Subtitle').map(s => s.Index)
+        },
+
         /** Resolves a movie/episode to itself and a series/season to its episodes in order. */
         async queueItems(id: string): Promise<QueueItem[]> {
+            if (!/^[0-9a-f-]{32,36}$/i.test(id)) {
+                return [] // an empty Ids filter would list the whole library
+            }
             const found = await listItems(new URLSearchParams({ Ids: id }))
             const item = found.Items[0]
-            if (!item) {
+            if (!item || !PLAYABLE.has(item.Type)) {
                 return []
             }
             let items = [item]
@@ -165,6 +186,7 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
 }
 
 const PAGE = 60
+const PLAYABLE = new Set(['Movie', 'Episode', 'Series', 'Season'])
 const INDEX_TTL_MS = 10 * 60_000
 const VIDEO_LIBRARIES = new Set(['movies', 'tvshows', 'mixed', 'homevideos'])
 const SORTS: Record<string, Record<string, string>> = {
@@ -177,7 +199,9 @@ const SORTS: Record<string, Record<string, string>> = {
 /** What the host's catalogue shows: title, a line below it, and the full label used in the queue. */
 export type Card = { id: string; name: string; type: string; title: string; subtitle: string; rating: number | null }
 
-export type Details = Card & { year: number | null; overview: string; genres: string[]; certification: string; runtime: number; backdrop: boolean }
+export type RemoteSubtitle = { id: string; name: string; provider: string; format: string; downloads: number; exact: boolean }
+
+export type Details =Card & { year: number | null; overview: string; genres: string[]; certification: string; runtime: number; backdrop: boolean }
 
 function card(i: JfItem): Card {
     const subtitle = i.Type === 'Episode' ? [i.SeriesName, episodeCode(i)].filter(Boolean).join(' · ')

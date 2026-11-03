@@ -11,7 +11,9 @@ test('search and queueItems pass userId when set', async (t) => {
     const jf = createJellyfin('http://jf', 'key', 'u1')
     assert.equal(jf.userId, 'u1')
     await jf.search('a')
-    await jf.queueItems('a')
+    await jf.queueItems('a'.repeat(32))
+    assert.equal(urls.length, 2)
+    assert.deepEqual(await jf.queueItems(''), []) // never an unfiltered library listing
     assert.equal(urls.length, 2)
     for (const url of urls) {
         assert.equal(new URL(url).searchParams.get('userId'), 'u1')

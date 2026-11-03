@@ -5,6 +5,9 @@ import { once } from 'node:events'
 import { createServer, request, type IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { connect } from 'node:net'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import WebSocket from 'ws'
 
 const PORT = 18_000 + Math.floor(Math.random() * 1000)
@@ -41,7 +44,7 @@ before(async () => {
     await new Promise<void>(resolve => fakeJellyfin.listen(0, '127.0.0.1', resolve))
     const jellyfinUrl = `http://127.0.0.1:${(fakeJellyfin.address() as AddressInfo).port}`
     server = spawn(process.execPath, ['src/server.ts'], {
-        env: { ...process.env, PORT: String(PORT), JELLYFIN_URL: jellyfinUrl, JELLYFIN_API_KEY: 'x', HOST_PASSWORD: 'pw', PUBLIC_URL: BASE },
+        env: { ...process.env, PORT: String(PORT), JELLYFIN_URL: jellyfinUrl, JELLYFIN_API_KEY: 'x', ADMIN_PASSWORD: 'admin-pw', PUBLIC_URL: BASE, DATA_DIR: mkdtempSync(join(tmpdir(), 'bloom-')) },
         stdio: 'ignore',
     })
     await waitFor(async () => ((await fetch(`${BASE}/api/health`)).ok ? true : undefined))
@@ -52,10 +55,18 @@ after(() => {
     fakeJellyfin.close()
 })
 
-async function login(): Promise<string> {
-    const res = await fetch(`${BASE}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'pw' }) })
+async function login(username = 'admin', password = 'admin-pw'): Promise<string> {
+    const res = await fetch(`${BASE}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) })
     assert.equal(res.status, 200)
     return res.headers.get('set-cookie')!.split(';')[0]
+}
+
+/** A new non-admin account, created by the admin, and its session cookie. */
+async function newUser(name: string): Promise<string> {
+    const admin = await login()
+    const res = await fetch(`${BASE}/api/admin/users`, { method: 'POST', headers: { cookie: admin, 'content-type': 'application/json' }, body: JSON.stringify({ name, password: 'secret1' }) })
+    assert.equal(res.status, 200)
+    return login(name, 'secret1')
 }
 
 function openSocket(roomId: string, cookie?: string, origin?: string) {
@@ -73,16 +84,51 @@ function openSocket(roomId: string, cookie?: string, origin?: string) {
 
 test('reports Jellyfin problems without crashing', async () => {
     const me = await waitFor(async () => {
-        const body = (await (await fetch(`${BASE}/api/me`)).json()) as { host: boolean; jellyfinError?: string }
+        const body = (await (await fetch(`${BASE}/api/me`)).json()) as { user: unknown; jellyfinError?: string }
         return /Cannot reach Jellyfin/.test(body.jellyfinError ?? '') ? body : undefined
     })
-    assert.equal(me.host, false)
+    assert.equal(me.user, null)
 })
 
 test('host-only endpoints require login', async () => {
     assert.equal((await fetch(`${BASE}/api/rooms`, { method: 'POST' })).status, 403)
-    const wrong = await fetch(`${BASE}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'nope' }) })
+    const wrong = await fetch(`${BASE}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'nope' }) })
     assert.equal(wrong.status, 401)
+})
+
+test('users only see, host and end their own rooms', async () => {
+    const alice = await newUser('alice')
+    const bob = await newUser('bob')
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie: alice } })).json()) as { id: string }
+    const list = async (cookie: string) => ((await (await fetch(`${BASE}/api/rooms`, { headers: { cookie } })).json()) as Array<{ id: string; name: string }>)
+    assert.deepEqual((await list(alice)).map(r => r.name), ["alice's room"])
+    assert.deepEqual(await list(bob), [])
+    assert.equal((await fetch(`${BASE}/api/rooms/${id}`, { method: 'DELETE', headers: { cookie: bob } })).status, 404)
+    assert.equal((await fetch(`${BASE}/api/admin/overview`, { headers: { cookie: bob } })).status, 403)
+
+    const asBob = openSocket(id, bob)
+    const asAlice = openSocket(id, alice)
+    assert.equal((await asBob.next(m => m.type === 'welcome')).isHost, false)
+    assert.equal((await asAlice.next(m => m.type === 'welcome')).isHost, true)
+    asBob.close()
+    asAlice.close()
+
+    const overview = (await (await fetch(`${BASE}/api/admin/overview`, { headers: { cookie: await login() } })).json()) as { rooms: Array<{ id: string; owner: string }> }
+    assert.equal(overview.rooms.find(r => r.id === id)?.owner, 'alice')
+})
+
+test('disabling a user logs them out and ends their rooms', async () => {
+    const carol = await newUser('carol')
+    const admin = await login()
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie: carol } })).json()) as { id: string }
+    const users = (await (await fetch(`${BASE}/api/admin/overview`, { headers: { cookie: admin } })).json()) as { users: Array<{ id: string; name: string }> }
+    const carolId = users.users.find(u => u.name === 'carol')!.id
+    const patch = (body: unknown) => fetch(`${BASE}/api/admin/users/${carolId}`, { method: 'PATCH', headers: { cookie: admin, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    assert.equal((await patch({ disabled: true })).status, 200)
+    assert.equal((await fetch(`${BASE}/api/rooms`, { headers: { cookie: carol } })).status, 403)
+    assert.equal((await fetch(`${BASE}/api/rooms/${id}/access`)).status, 404)
+    const relogin = await fetch(`${BASE}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'carol', password: 'secret1' }) })
+    assert.equal(relogin.status, 401)
 })
 
 test('serves pages and static files, never source', async () => {

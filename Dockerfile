@@ -4,7 +4,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src src
 COPY web web
-ENV NODE_ENV=production
+ENV NODE_ENV=production DATA_DIR=/data
+RUN mkdir /data && chown node:node /data
 EXPOSE 8080
 USER node
 CMD ["node", "src/server.ts"]

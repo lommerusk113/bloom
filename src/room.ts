@@ -2,6 +2,10 @@ export type QueueItem = { id: string; name: string; runtime: number }
 
 export type Room = {
     id: string
+    /** Shown instead of what's playing, e.g. "Joakim's room". */
+    name: string
+    /** User id of the account that created the room: its host. */
+    owner: string
     queue: QueueItem[]
     index: number
     playing: boolean
@@ -23,11 +27,11 @@ export type Command =
     | { type: 'queueMove'; from: number; to: number }
     | { type: 'setGuestControl'; value: boolean }
 
-const ROOM_TTL_MS = 30 * 60_000
+export const ROOM_TTL_MS = 5 * 60_000
 const HOST_ONLY: ReadonlySet<Command['type']> = new Set(['queueAdd', 'queueRemove', 'queueMove', 'setGuestControl'])
 
-export function createRoom(id: string, now: number): Room {
-    return { id, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true, waiting: false }
+export function createRoom(id: string, now: number, owner = '', name = 'Room'): Room {
+    return { id, name, owner, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true, waiting: false }
 }
 
 export function currentPosition(room: Room, now: number): number {
@@ -89,7 +93,7 @@ export function advanceIfEnded(room: Room, now: number): boolean {
 }
 
 /**
- * Advances rooms whose item ended and deletes rooms without viewers for over 30 minutes.
+ * Advances rooms whose item ended and deletes rooms that have been empty for over ROOM_TTL_MS.
  * emptySince holds when each room became idle and is updated in place.
  */
 export function sweepRooms(
