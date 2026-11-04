@@ -78,6 +78,22 @@ async function login(username = 'admin', password = 'admin-pw'): Promise<string>
 }
 
 
+/** The cookies a guest gets by opening the room's current invite link and typing its password; only its host sees both. */
+async function invited(roomId: string, hostCookie: string, withPassword = true): Promise<string> {
+    const rooms = (await (await fetch(`${BASE}/api/rooms`, { headers: { cookie: hostCookie } })).json()) as Array<{ id: string; link: string; password: string }>
+    const room = rooms.find(r => r.id === roomId)!
+    const post = (path: string, body: unknown) => fetch(`${BASE}/api/rooms/${roomId}/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    const res = await post('invite', { key: new URL(room.link).searchParams.get('i') })
+    assert.equal(res.status, 200)
+    const admission = res.headers.get('set-cookie')!.split(';')[0]
+    if (!withPassword) {
+        return admission
+    }
+    const joined = await post('join', { password: room.password })
+    assert.equal(joined.status, 200)
+    return `${admission}; ${joined.headers.get('set-cookie')!.split(';')[0]}`
+}
+
 function openSocket(roomId: string, cookie?: string, origin?: string) {
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${roomId}`, { headers: cookie ? { cookie } : {}, origin })
     const messages: Array<Record<string, any>> = []
@@ -112,11 +128,14 @@ test('users only see, host and end their own rooms', async () => {
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie: alice } })).json()) as { id: string }
     const list = async (cookie: string) => ((await (await fetch(`${BASE}/api/rooms`, { headers: { cookie } })).json()) as Array<{ id: string; name: string }>)
     assert.deepEqual((await list(alice)).map(r => r.name), ["alice's room"])
+    const again = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie: alice } })).json()) as { id: string }
+    assert.equal(again.id, id) // one room per host
     assert.deepEqual(await list(bob), [])
     assert.equal((await fetch(`${BASE}/api/rooms/${id}`, { method: 'DELETE', headers: { cookie: bob } })).status, 404)
     assert.equal((await fetch(`${BASE}/api/admin/overview`, { headers: { cookie: bob } })).status, 403)
 
-    const asBob = openSocket(id, bob)
+    assert.equal((await once(new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`, { headers: { cookie: bob } }), 'close'))[0], 4401) // an account alone is no invite
+    const asBob = openSocket(id, `${bob}; ${await invited(id, alice)}`)
     const asAlice = openSocket(id, alice)
     assert.equal((await asBob.next(m => m.type === 'welcome')).isHost, false)
     assert.equal((await asAlice.next(m => m.type === 'welcome')).isHost, true)
@@ -129,6 +148,8 @@ test('users only see, host and end their own rooms', async () => {
 
 test('serves pages and static files, never source', async () => {
     assert.equal((await fetch(`${BASE}/web/style.css`)).status, 200)
+    assert.equal((await fetch(`${BASE}/`)).headers.get('x-robots-tag'), 'noindex, nofollow, noarchive')
+    assert.match(await (await fetch(`${BASE}/robots.txt`)).text(), /Disallow: \//)
     assert.equal((await fetch(`${BASE}/web/logo.svg`)).headers.get('content-type'), 'image/svg+xml')
     // fetch normalizes '..' away, so send the raw paths
     for (const path of ['/web/../src/server.ts', '/web/..%2fsrc%2fserver.ts', '/web/..%2Fsrc%2Fserver.ts']) {
@@ -157,7 +178,7 @@ test('room sockets share state and know who is host', async () => {
     proxied.close()
 
     const host = openSocket(id, cookie, BASE)
-    const guest = openSocket(id)
+    const guest = openSocket(id, await invited(id, cookie))
     await Promise.all([host.ready, guest.ready])
     host.send({ type: 'hello', name: 'Host' })
     guest.send({ type: 'hello', name: 'Alice' })
@@ -176,7 +197,7 @@ test('the host sees who did what, everyone sees reactions, and the host can remo
     const cookie = await login()
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
     const host = openSocket(id, cookie, BASE)
-    const guest = openSocket(id)
+    const guest = openSocket(id, await invited(id, cookie))
     await Promise.all([host.ready, guest.ready])
     host.send({ type: 'hello', name: 'Host' })
     guest.send({ type: 'hello', name: 'Alice' })
@@ -196,7 +217,7 @@ test('the host sees who did what, everyone sees reactions, and the host can remo
     guest.send({ type: 'chat', text: '  hi all  ', gif: { url: 'https://evil.example/track.gif' } })
     const chat = await host.next(m => m.type === 'chat')
     assert.deepEqual([chat.message.name, chat.message.text, chat.message.gif], ['Alice', 'hi all', null])
-    const late = openSocket(id)
+    const late = openSocket(id, await invited(id, cookie))
     assert.deepEqual((await late.next(m => m.type === 'welcome')).chat.map((m: { text: string }) => m.text), ['hi all'])
     late.close()
 
@@ -207,17 +228,12 @@ test('the host sees who did what, everyone sees reactions, and the host can remo
     host.close()
 })
 
-test('guests suggest titles and accounts share a watchlist', async () => {
+test('guest suggestions never search the library, and accounts share a watchlist', async () => {
     const cookie = await login('alice', 'secret1')
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
-    const guest = openSocket(id)
-    await guest.ready
-    guest.send({ type: 'hello', name: 'Bob' })
-    guest.send({ type: 'suggest', itemId: MOVIE })
-    const state = await guest.next(m => m.type === 'state' && m.room.suggestions.length > 0)
-    assert.deepEqual(state.room.suggestions, [{ id: MOVIE, name: 'Movie', by: 'Bob' }])
-    assert.equal((await guest.next(m => m.type === 'chat')).message.text, '💡 suggested Movie')
-    guest.close()
+    const guest = { cookie: await invited(id, cookie) }
+    // without TMDB there is nothing to suggest from; the library's titles are never offered instead
+    assert.deepEqual(await (await fetch(`${BASE}/r/${id}/search?q=Movie`, { headers: guest })).json(), [])
 
     const json = { cookie, 'content-type': 'application/json' }
     await fetch(`${BASE}/api/watchlist`, { method: 'POST', headers: json, body: JSON.stringify({ id: MOVIE }) })
@@ -233,7 +249,7 @@ test('guests suggest titles and accounts share a watchlist', async () => {
 test('an oversized websocket frame drops only that client', async () => {
     const cookie = await login()
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
-    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`)
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`, { headers: { cookie: await invited(id, cookie) } })
     await once(ws, 'open')
     ws.send('x'.repeat(70_000))
     await once(ws, 'close')
@@ -249,7 +265,7 @@ test('a socket to an unknown room is closed with 4404', async () => {
 test('only the host can end a room, which disconnects everyone with 4404', async () => {
     const cookie = await login()
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
-    const guest = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`)
+    const guest = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`, { headers: { cookie: await invited(id, cookie) } })
     await once(guest, 'open')
     assert.equal((await fetch(`${BASE}/api/rooms/${id}`, { method: 'DELETE' })).status, 403)
     const closed = once(guest, 'close')
@@ -258,7 +274,20 @@ test('only the host can end a room, which disconnects everyone with 4404', async
     assert.equal((await fetch(`${BASE}/api/rooms/${id}`, { method: 'DELETE', headers: { cookie } })).status, 404)
 })
 
-test('a room password keeps out guests until they enter it', async () => {
+test('only a current invite link lets a guest in', async () => {
+    const cookie = await login()
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
+    const access = async (headers = {}) => (await (await fetch(`${BASE}/api/rooms/${id}/access`, { headers })).json()) as { allowed: boolean; invited: boolean }
+    assert.deepEqual(await access(), { locked: true, allowed: false, invited: false }) // the bare room link
+    const stranger = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`)
+    assert.equal((await once(stranger, 'close'))[0], 4401)
+    const guess = await fetch(`${BASE}/api/rooms/${id}/invite`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'guessed' }) })
+    assert.equal(guess.status, 403)
+    assert.deepEqual(await access({ cookie: await invited(id, cookie, false) }), { locked: true, allowed: false, invited: true }) // the password still
+    assert.deepEqual(await access({ cookie: await invited(id, cookie) }), { locked: true, allowed: true, invited: true })
+})
+
+test('every room has a password that keeps out guests until they enter it, and the host keeps theirs', async () => {
     const cookie = await login()
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
     const setPassword = (password: string, headers: Record<string, string> = { cookie }) =>
@@ -266,10 +295,11 @@ test('a room password keeps out guests until they enter it', async () => {
     assert.equal((await setPassword('open sesame', {})).status, 403)
     assert.equal((await setPassword('open sesame')).status, 200)
 
-    const access = async (headers = {}) => (await (await fetch(`${BASE}/api/rooms/${id}/access`, { headers })).json()) as { locked: boolean; allowed: boolean }
-    assert.deepEqual(await access(), { locked: true, allowed: false })
-    assert.deepEqual(await access({ cookie }), { locked: true, allowed: true })
-    const locked = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`)
+    const access = async (headers = {}) => (await (await fetch(`${BASE}/api/rooms/${id}/access`, { headers })).json()) as { locked: boolean; allowed: boolean; invited: boolean }
+    const admission = await invited(id, cookie, false)
+    assert.deepEqual(await access({ cookie: admission }), { locked: true, allowed: false, invited: true })
+    assert.deepEqual(await access({ cookie }), { locked: true, allowed: true, invited: true })
+    const locked = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`, { headers: { cookie: admission } })
     assert.equal((await once(locked, 'close'))[0], 4401)
     const playbackInfo = (headers = {}) => fetch(`${BASE}/r/${id}/jf/Items/${'a'.repeat(32)}/PlaybackInfo`, { method: 'POST', headers })
     assert.equal((await playbackInfo()).status, 401)
@@ -278,8 +308,8 @@ test('a room password keeps out guests until they enter it', async () => {
     assert.equal((await join('wrong')).status, 401)
     const ok = await join('open sesame')
     assert.equal(ok.status, 200)
-    const guestCookie = ok.headers.get('set-cookie')!.split(';')[0]
-    assert.deepEqual(await access({ cookie: guestCookie }), { locked: true, allowed: true })
+    const guestCookie = `${admission}; ${ok.headers.get('set-cookie')!.split(';')[0]}`
+    assert.deepEqual(await access({ cookie: guestCookie }), { locked: true, allowed: true, invited: true })
     assert.equal((await playbackInfo({ cookie: guestCookie })).status, 404) // past the lock: item not in queue
     const guest = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`, { headers: { cookie: guestCookie } })
     await once(guest, 'open')
@@ -287,15 +317,19 @@ test('a room password keeps out guests until they enter it', async () => {
 
     const rooms = (await (await fetch(`${BASE}/api/rooms`, { headers: { cookie } })).json()) as Array<{ id: string; password: string }>
     assert.equal(rooms.find(r => r.id === id)?.password, 'open sesame')
-    assert.equal((await setPassword('')).status, 200)
-    assert.deepEqual(await access(), { locked: false, allowed: true })
+    assert.equal((await setPassword('')).status, 400) // it can be changed, not removed
+    assert.equal((await setPassword('abc')).status, 400)
+    await fetch(`${BASE}/api/rooms/${id}`, { method: 'DELETE', headers: { cookie } })
+    const next = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
+    const fresh = (await (await fetch(`${BASE}/api/rooms`, { headers: { cookie } })).json()) as Array<{ id: string; password: string }>
+    assert.equal(fresh.find(r => r.id === next.id)?.password, 'open sesame') // remembered for the next room
 })
 
 test('a buffering viewer holds a playing room until it has loaded', async () => {
     const cookie = await login()
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
     const host = openSocket(id, cookie)
-    const guest = openSocket(id)
+    const guest = openSocket(id, await invited(id, cookie))
     await Promise.all([host.ready, guest.ready])
     guest.send({ type: 'hello', name: 'Slow' })
     host.send({ type: 'addItem', itemId: MOVIE })
@@ -322,7 +356,7 @@ test('a malformed upgrade target does not crash the server', async () => {
 test('websocket messages beyond the rate limit are dropped', async () => {
     const cookie = await login()
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
-    const guest = openSocket(id)
+    const guest = openSocket(id, await invited(id, cookie))
     await guest.ready
     for (let i = 0; i < 200; i++) {
         guest.send({ type: 'hello', name: `G${i}` })
@@ -339,9 +373,10 @@ test('websocket messages beyond the rate limit are dropped', async () => {
 test('a room accepts at most 50 sockets', async () => {
     const cookie = await login()
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
-    const sockets = Array.from({ length: 50 }, () => new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`))
+    const guest = { cookie: await invited(id, cookie) }
+    const sockets = Array.from({ length: 50 }, () => new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`, { headers: guest }))
     await Promise.all(sockets.map(ws => once(ws, 'open')))
-    const extra = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`)
+    const extra = new WebSocket(`ws://127.0.0.1:${PORT}/ws/${id}`, { headers: guest })
     await assert.rejects(once(extra, 'open'))
     sockets.forEach(ws => ws.terminate())
 })

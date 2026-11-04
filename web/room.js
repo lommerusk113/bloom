@@ -60,13 +60,38 @@ const deviceId = recall('wp_device') ?? (crypto.randomUUID?.() ?? Math.random().
 store('wp_device', deviceId)
 
 $('name').value = recall('wp_name') ?? ''
-fetch(`/api/rooms/${roomId}/access`).then(res => res.json()).then(({ locked, allowed }) => {
+/** Trades the link's invite key for a cookie, then lets the visitor in, asks for the password, or explains why not. */
+async function checkAccess() {
+    const key = new URLSearchParams(location.search).get('i')
+    if (key) {
+        await fetch(`/api/rooms/${roomId}/invite`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }) }).catch(() => null)
+        history.replaceState(null, '', location.pathname + location.hash) // the cookie keeps them in; a copied address bar doesn't
+    }
+    const res = await fetch(`/api/rooms/${roomId}/access`).catch(() => null)
+    if (!res?.ok) {
+        refuse(res?.status === 404 ? 'This room no longer exists.' : 'Could not reach Bloom, try again.')
+        return
+    }
+    const { locked, allowed, invited } = await res.json()
+    if (!invited) {
+        refuse('This invite link has expired or is incomplete. Ask the host for the current link.')
+        return
+    }
     $('password').hidden = !(locked && !allowed)
     $('password').required = locked && !allowed
     if ($('password').hidden && $('name').value) {
         join() // remembered name and no password to type: straight in; "Tap to start" covers blocked autoplay
     }
-}).catch(() => {}) // unknown room: the socket reports it as gone
+}
+
+function refuse(reason) {
+    $('name').hidden = true
+    $('join').querySelector('button').hidden = true
+    $('join').querySelector('p.muted').hidden = true
+    $('joinError').textContent = reason
+}
+
+checkAccess()
 
 $('join').onsubmit = (event) => {
     event.preventDefault()
@@ -159,6 +184,7 @@ function onMessage(msg) {
         isHost = msg.isHost
         myId = msg.id
         $('gifButton').hidden = !msg.gifs
+        $('suggestButton').hidden = !msg.suggest // suggestions search TMDB
         showChatHistory(msg.chat)
         reportedBuffering = false // a new connection starts out not buffering on the server
         if (speedMbps !== null) {
@@ -966,18 +992,27 @@ $('suggestSearch').oninput = () => {
         if (token !== suggestToken) {
             return
         }
-        $('suggestResults').replaceChildren(...found.map((card) => {
+        $('suggestResults').replaceChildren(...found.map((t) => {
             const pick = document.createElement('button')
             pick.type = 'button'
+            const poster = document.createElement('img')
+            poster.alt = ''
+            poster.loading = 'lazy'
+            poster.referrerPolicy = 'no-referrer'
+            if (t.poster) {
+                poster.src = t.poster
+            }
             const title = document.createElement('span')
-            title.textContent = card.title
+            title.textContent = t.name
             const sub = document.createElement('small')
-            sub.textContent = [card.type === 'Series' ? 'Show' : 'Movie', card.subtitle].filter(Boolean).join(' · ')
-            pick.append(title, sub)
+            sub.textContent = t.type === 'Series' ? 'Show' : 'Movie'
+            const text = document.createElement('div')
+            text.append(title, sub)
+            pick.append(poster, text)
             pick.onclick = () => {
-                socket.send({ type: 'suggest', itemId: card.id })
+                socket.send({ type: 'suggest', tmdbId: t.tmdbId, kind: t.type })
                 pick.disabled = true
-                title.textContent = `✓ Suggested ${card.title}`
+                title.textContent = `✓ Suggested ${t.name}`
             }
             return listItem('', pick)
         }))

@@ -1,9 +1,9 @@
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join } from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
-import { createAuth } from './auth.ts'
+import { createAuth, parseCookies, sessionCookie } from './auth.ts'
 import { createUsers, type Account } from './users.ts'
 import { createHistory } from './history.ts'
 import { loadJson, saveJson } from './store.ts'
@@ -68,6 +68,13 @@ const GIPHY_API_KEY = process.env.GIPHY_API_KEY || ''
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || ''
 /** Room passwords, kept out of Room so they are never broadcast. */
 const locks = new Map<string, { password: string; auth: ReturnType<typeof createAuth> }>()
+/**
+ * Invite keys, kept out of Room so they are never broadcast: a room's link carries its key, renewed every
+ * INVITE_TTL_MS so old links stop letting new people in. previous still works for a short grace period.
+ */
+const invites = new Map<string, { key: string; at: number; previous: string | null }>()
+const INVITE_TTL_MS = 24 * 3600_000
+const INVITE_GRACE_MS = 3600_000
 
 const rooms = new Map<string, Room>()
 const clients = new Map<string, Set<Client>>()
@@ -197,14 +204,90 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 const viewersOf = (room: Room): Client[] => [...(clients.get(room.id) ?? [])].filter(c => !c.observer)
 
 function roomSummary(room: Room) {
-    return { id: room.id, name: room.name, viewers: viewersOf(room).length, password: locks.get(room.id)?.password ?? '' }
+    return { id: room.id, name: room.name, viewers: viewersOf(room).length, password: locks.get(room.id)?.password ?? '', link: inviteLink(room) }
 }
 
-/** The room's host, anyone in a room without a password, or a guest who entered it. */
+/** The room's host, or a guest who came in through a current invite link (and gave the password, if it has one). */
 function mayJoin(req: IncomingMessage, room: Room): boolean {
+    if (isOwner(users.fromRequest(req), room)) {
+        return true
+    }
     const lock = locks.get(room.id)
-    return !lock || isOwner(users.fromRequest(req), room) || lock.auth.isLoggedIn(req)
+    return admitted(req, room) && (!lock || lock.auth.isLoggedIn(req))
 }
+
+// --- invite links: /r/<id>?i=<key>; whoever opens a current one gets a cookie that keeps them in the room ---
+
+/** Signs admission cookies; kept in the data volume so guests stay admitted across restarts. */
+const SECRET = (() => {
+    const file = join(DATA_DIR, 'secret.json')
+    const stored = loadJson<{ secret?: string }>(file, {})
+    if (!stored.secret) {
+        stored.secret = randomBytes(32).toString('base64url')
+        saveJson(file, stored)
+    }
+    return stored.secret
+})()
+
+const admissionCookie = (room: Room) => `wp_in_${room.id}`
+const admission = (room: Room) => createHmac('sha256', SECRET).update(`admit:${room.id}`).digest('base64url')
+
+function admitted(req: IncomingMessage, room: Room): boolean {
+    const presented = Buffer.from(parseCookies(req.headers.cookie).get(admissionCookie(room)) ?? '')
+    const expected = Buffer.from(admission(room))
+    return presented.length === expected.length && timingSafeEqual(presented, expected)
+}
+
+function invite(room: Room, now = Date.now()): { key: string; at: number; previous: string | null } {
+    let current = invites.get(room.id)
+    if (!current || now - current.at > INVITE_TTL_MS) {
+        current = { key: randomBytes(12).toString('base64url'), at: now, previous: current?.key ?? null }
+        invites.set(room.id, current)
+        const message = JSON.stringify({ type: 'invite', link: `${PUBLIC_URL}/r/${room.id}?i=${current.key}` })
+        for (const client of clients.get(room.id) ?? []) {
+            if (client.isHost) {
+                send(client, message) // the host's page shows the new link
+            }
+        }
+    }
+    return current
+}
+
+const inviteLink = (room: Room) => `${PUBLIC_URL}/r/${room.id}?i=${invite(room).key}`
+
+function validInvite(room: Room, key: string, now = Date.now()): boolean {
+    const current = invite(room, now)
+    return key === current.key || (key === current.previous && now - current.at < INVITE_GRACE_MS)
+}
+
+/** Every room has a password; guests type it once, besides opening a current invite link. */
+function lock(roomId: string, password: string): void {
+    locks.set(roomId, { password, auth: createAuth(password, SECURE, `wp_room_${roomId}`) })
+}
+
+const PASSWORD_WORDS = ['otter', 'maple', 'comet', 'pixel', 'tiger', 'lemon', 'ember', 'river', 'cloud', 'cedar', 'falcon', 'velvet', 'mango', 'orbit', 'harbor', 'pepper', 'willow', 'nova', 'aurora', 'fjord']
+
+/** Each host's room password, so a new room keeps the one they chose. */
+const PASSWORDS_FILE = join(DATA_DIR, 'passwords.json')
+const hostPasswords = loadJson<Record<string, string>>(PASSWORDS_FILE, {})
+
+function rememberPassword(ownerId: string, password: string): void {
+    if (hostPasswords[ownerId] !== password) {
+        hostPasswords[ownerId] = password
+        saveJson(PASSWORDS_FILE, hostPasswords)
+    }
+}
+
+/** The host's remembered password, or a new one for their first room. */
+function hostPassword(ownerId: string): string {
+    if (!hostPasswords[ownerId]) {
+        rememberPassword(ownerId, newPassword())
+    }
+    return hostPasswords[ownerId]
+}
+
+/** A password a host can read out loud, like "otter-maple-42". */
+const newPassword = () => `${PASSWORD_WORDS[randomInt(PASSWORD_WORDS.length)]}-${PASSWORD_WORDS[randomInt(PASSWORD_WORDS.length)]}-${randomInt(10, 100)}`
 
 const isOwner = (user: Account | null, room: Room): boolean => user !== null && user.id === room.owner
 
@@ -239,6 +322,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const url = new URL(req.url ?? '/', 'http://localhost')
     const path = url.pathname
     const method = req.method ?? 'GET'
+    // a private site: keep it out of search results
+    res.setHeader('x-robots-tag', 'noindex, nofollow, noarchive')
+    if (path === '/robots.txt') {
+        res.writeHead(200, { 'content-type': 'text/plain' }).end('User-agent: *\nDisallow: /\n')
+        return
+    }
 
     const proxied = /^\/r\/([\w-]+)\/jf(\/.*)$/.exec(path)
     if (proxied) {
@@ -286,9 +375,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             return
         }
         if (roomTool[2] === 'search') {
-            // guests search the library to suggest something; only what a card shows
+            // guests suggest from TMDB's catalogue, so a link never reveals what the library holds
             const term = (url.searchParams.get('q') ?? '').trim().slice(0, 100)
-            return sendJson(res, 200, term ? (await jf.search(term)).filter(c => c.type !== 'Episode').slice(0, 20) : [])
+            return sendJson(res, 200, term && tmdb ? await tmdb.search(term) : [])
         }
         if (roomTool[2] === 'gifs') {
             return sendJson(res, 200, await searchGifs(url.searchParams.get('q') ?? ''))
@@ -322,18 +411,29 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         }
         if (path === '/api/me') {
             const user = users.fromRequest(req)
-            return sendJson(res, 200, { user: user && { name: user.name, admin: user.admin }, jellyfinError })
+            return sendJson(res, 200, { user: user && { name: user.name, admin: user.admin }, jellyfinError, server: jellyfinInfo?.ServerName ?? '' })
+        }
+        if (path === '/api/backdrops') {
+            // TMDB's public trending art, never the library's own: the login page shows it to anyone
+            return sendJson(res, 200, tmdb ? await tmdb.backdrops().catch(() => []) : [])
         }
     }
 
-    const roomAccess = /^\/api\/rooms\/([\w-]+)\/(access|join)$/.exec(path)
+    const roomAccess = /^\/api\/rooms\/([\w-]+)\/(access|join|invite)$/.exec(path)
     if (roomAccess) {
         const room = rooms.get(roomAccess[1])
         if (!room) {
             return sendJson(res, 404, { error: 'Room not found' })
         }
         if (method === 'GET' && roomAccess[2] === 'access') {
-            return sendJson(res, 200, { locked: locks.has(room.id), allowed: mayJoin(req, room) })
+            return sendJson(res, 200, { locked: locks.has(room.id), allowed: mayJoin(req, room), invited: admitted(req, room) || isOwner(users.fromRequest(req), room) })
+        }
+        if (method === 'POST' && roomAccess[2] === 'invite') {
+            if (!validInvite(room, String((await readJson(req)).key ?? ''))) {
+                return sendJson(res, 403, { error: 'This invite link has expired. Ask the host for the current one.' })
+            }
+            res.setHeader('set-cookie', sessionCookie(admissionCookie(room), admission(room), SECURE))
+            return sendJson(res, 200, { ok: true })
         }
         if (method === 'POST' && roomAccess[2] === 'join') {
             const lock = locks.get(room.id)
@@ -381,8 +481,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         return sendJson(res, 200, [...rooms.values()].filter(r => isOwner(user, r)).map(roomSummary))
     }
     if (method === 'POST' && path === '/api/rooms') {
+        // one room per host: guests join it by link, so a second one has no use
+        const existing = [...rooms.values()].find(r => isOwner(user, r))
+        if (existing) {
+            return sendJson(res, 200, { id: existing.id })
+        }
         const id = randomBytes(16).toString('base64url')
         rooms.set(id, createRoom(id, Date.now(), user.id, `${user.name}'s room`))
+        lock(id, hostPassword(user.id))
         return sendJson(res, 200, { id })
     }
     const setting = method === 'POST' ? /^\/api\/rooms\/([\w-]+)\/password$/.exec(path) : null
@@ -391,12 +497,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         if (!room || !isOwner(user, room)) {
             return sendJson(res, 404, { error: 'Room not found' })
         }
-        const password = String((await readJson(req)).password ?? '').slice(0, 100)
-        if (password) {
-            locks.set(room.id, { password, auth: createAuth(password, SECURE, `wp_room_${room.id}`) })
-        } else {
-            locks.delete(room.id)
+        const password = String((await readJson(req)).password ?? '').trim().slice(0, 100)
+        if (password.length < 4) {
+            return sendJson(res, 400, { error: 'A room always has a password: at least 4 characters' })
         }
+        lock(room.id, password)
+        rememberPassword(room.owner, password) // the host's next room starts with it too
         return sendJson(res, 200, { ok: true })
     }
     const ending = method === 'DELETE' ? /^\/api\/rooms\/([\w-]+)$/.exec(path) : null
@@ -448,6 +554,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
     if (path === '/api/watchlist' || path.startsWith('/api/watchlist/')) {
         return watchlistApi(req, res, user, method, path)
+    }
+    if (method === 'GET' && path === '/api/match') {
+        // the library's item for a TMDB title, or null: for the host's view of guests' suggestions
+        return sendJson(res, 200, (await jf.byTmdb()).get(`${url.searchParams.get('type') === 'Series' ? 'Series' : 'Movie'}:${url.searchParams.get('tmdb') ?? ''}`) ?? null)
     }
     if (method === 'GET' && path === '/api/resume') {
         return sendJson(res, 200, await jf.resume(user.id))
@@ -535,6 +645,7 @@ async function endRoom(room: Room): Promise<void> {
     rooms.delete(room.id)
     emptySince.delete(room.id)
     locks.delete(room.id)
+    invites.delete(room.id)
     logs.delete(room.id)
     chats.delete(room.id)
     for (const client of clients.get(room.id) ?? []) {
@@ -590,7 +701,7 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
     ws.on('pong', () => alive.add(ws))
     // oversized or malformed frames emit 'error'; unhandled it would crash the process
     ws.on('error', () => ws.terminate())
-    send(client, JSON.stringify({ type: 'welcome', isHost, id: client.id, gifs: GIPHY_API_KEY !== '', discord: DISCORD_WEBHOOK_URL !== '', chat: chats.get(room.id) ?? [] }))
+    send(client, JSON.stringify({ type: 'welcome', isHost, id: client.id, link: isHost ? inviteLink(room) : null, gifs: GIPHY_API_KEY !== '', suggest: tmdb !== null, discord: DISCORD_WEBHOOK_URL !== '', chat: chats.get(room.id) ?? [] }))
     sendLog(room, client)
     broadcast(room)
 
@@ -743,25 +854,23 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
             return
         }
         case 'suggest': {
-            const id = String(msg.itemId ?? '')
-            if (client.observer || !ITEM_ID.test(id) || now - client.lastChat < CHAT_GAP_MS || room.suggestions.some(s => s.id === id)) {
+            const tmdbId = String(msg.tmdbId ?? '')
+            const type = msg.kind === 'Series' ? 'Series' : 'Movie'
+            if (!tmdb || client.observer || !/^\d{1,10}$/.test(tmdbId) || now - client.lastChat < CHAT_GAP_MS || room.suggestions.some(s => s.tmdbId === tmdbId)) {
                 return
             }
             client.lastChat = now
-            const details = await jf.details(id)
-            if (!details) {
-                return
-            }
-            room.suggestions.push({ id, name: details.name, by: client.name })
+            const found = await tmdb.title(type === 'Series' ? 'tv' : 'movie', tmdbId)
+            room.suggestions.push({ tmdbId, type, name: found.name, by: client.name })
             room.suggestions.splice(0, room.suggestions.length - MAX_SUGGESTIONS)
-            postChat(room, { at: now, name: client.name, text: `💡 suggested ${details.name}`, gif: null, itemId: null, position: null })
+            postChat(room, { at: now, name: client.name, text: `💡 suggested ${found.name}`, gif: null, itemId: null, position: null })
             break
         }
         case 'dismissSuggestion':
             if (!client.isHost) {
                 return
             }
-            room.suggestions = room.suggestions.filter(s => s.id !== msg.itemId)
+            room.suggestions = room.suggestions.filter(s => s.tmdbId !== msg.tmdbId)
             break
         case 'voteStart': {
             if (!client.isHost) {
@@ -982,7 +1091,7 @@ function announce(room: Room, text: string): void {
     fetch(DISCORD_WEBHOOK_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ username: 'Bloom', content: `${text}\nJoin: ${PUBLIC_URL}/r/${room.id}`, allowed_mentions: { parse: [] } }),
+        body: JSON.stringify({ username: 'Bloom', content: `${text}\nJoin: ${inviteLink(room)}`, allowed_mentions: { parse: [] } }),
         signal: AbortSignal.timeout(8000),
     }).then((res) => {
         if (!res.ok) {
@@ -1044,7 +1153,7 @@ let savedRooms = ''
 
 /** Writes the rooms and their passwords when they changed (always on shutdown); called every few seconds. */
 function saveRooms(force = false): void {
-    const snapshot = JSON.stringify({ rooms: [...rooms.values()], passwords: Object.fromEntries([...locks].map(([id, lock]) => [id, lock.password])) })
+    const snapshot = JSON.stringify({ rooms: [...rooms.values()], passwords: Object.fromEntries([...locks].map(([id, lock]) => [id, lock.password])), invites: Object.fromEntries(invites) })
     if (force || snapshot !== savedRooms) {
         saveJson(ROOMS_FILE, { ...JSON.parse(snapshot), savedAt: Date.now() })
         savedRooms = snapshot
@@ -1053,19 +1162,19 @@ function saveRooms(force = false): void {
 
 function loadRooms(): void {
     const now = Date.now()
-    const saved = loadJson<{ rooms: Room[]; passwords: Record<string, string>; savedAt: number }>(ROOMS_FILE, { rooms: [], passwords: {}, savedAt: now })
+    const saved = loadJson<{ rooms: Room[]; passwords: Record<string, string>; invites?: Record<string, { key: string; at: number; previous: string | null }>; savedAt: number }>(ROOMS_FILE, { rooms: [], passwords: {}, savedAt: now })
     for (const stored of saved.rooms) {
         // defaults first: a room saved by an older version gets newer fields
-        const room = { ...createRoom(stored.id, now, stored.owner, stored.name), ...stored, vote: null, waiting: false }
+        const room = { ...createRoom(stored.id, now, stored.owner, stored.name), ...stored, vote: null, waiting: false, suggestions: (stored.suggestions ?? []).filter(s => s.tmdbId) }
         // pick up where it was when saved, not where the clock ran on to while the server was down
         room.position = Math.min(currentPosition(room, saved.savedAt), room.queue[room.index]?.runtime || Infinity)
         room.updatedAt = now
         rooms.set(room.id, room)
         emptySince.set(room.id, now) // the usual 5 minutes for its viewers to reconnect
         announced.set(room.id, room.queue[room.index]?.id ?? '') // already announced before the restart
-        const password = saved.passwords[room.id]
-        if (password) {
-            locks.set(room.id, { password, auth: createAuth(password, SECURE, `wp_room_${room.id}`) })
+        lock(room.id, saved.passwords[room.id] || hostPassword(room.owner)) // a room from before passwords were required gets one
+        if (saved.invites?.[room.id]) {
+            invites.set(room.id, saved.invites[room.id])
         }
     }
     if (saved.rooms.length) {
@@ -1131,6 +1240,7 @@ setInterval(() => {
         if (room.vote && Date.now() >= room.vote.endsAt) {
             finishVote(room).catch(err => console.error('Vote failed:', err.message))
         }
+        invite(room) // renews an expired link and tells the host
         trackWatching(room)
         continueShow(room)
         skipIntro(room)
@@ -1144,6 +1254,7 @@ setInterval(() => {
         announced.delete(id)
         clients.delete(id)
         locks.delete(id)
+        invites.delete(id)
         logs.delete(id)
         chats.delete(id)
         progress.delete(id) // empty for 5 minutes: the host's progress was saved while they were there

@@ -74,33 +74,40 @@ async function start() {
     $('jfError').textContent = me.jellyfinError ?? ''
     $('jfError').hidden = !me.jellyfinError
     if (!me.user) {
-        $('login').hidden = false
+        showLogin(me)
         return
     }
     account(me.user)
-    const rooms = await api('/api/rooms')
-    const room = rooms.find(r => r.id === roomId)
+    // every host has one room, made on first visit: straight into it
+    const room = (await api('/api/rooms')).find(r => r.id === roomId)
     if (room) {
         manage(room)
-    } else {
-        lobby(rooms)
+        return
     }
+    const { id } = await api('/api/rooms', { method: 'POST' })
+    location.replace(`/?room=${id}`)
 }
 
-function lobby(rooms) {
-    $('lobby').hidden = false
-    $('noRooms').hidden = rooms.length > 0
-    $('rooms').replaceChildren(...rooms.map((r) => {
-        const a = el('a', 'grow', r.name)
-        a.href = `/?room=${r.id}`
-        const item = el('li')
-        item.append(a, el('span', 'muted', `${r.viewers} connected`))
-        return item
-    }))
-    $('newRoom').onclick = async () => {
-        const { id } = await api('/api/rooms', { method: 'POST' })
-        location.search = `?room=${id}`
+/** The sign-in page: Jellyfin's server name, over this week's trending artwork when TMDB is set up. */
+async function showLogin(me) {
+    $('login').hidden = false
+    if (me.server) {
+        $('loginServer').textContent = `Sign in with your ${me.server} account`
     }
+    const art = await api('/api/backdrops').catch(() => [])
+    if (!art.length) {
+        return
+    }
+    let shown = 0
+    const show = () => {
+        const next = new Image()
+        next.onload = () => {
+            $('loginArt').style.backgroundImage = `url("${next.src}")`
+        }
+        next.src = art[shown++ % art.length]
+    }
+    show()
+    setInterval(show, 8000)
 }
 
 function account(user) {
@@ -110,6 +117,7 @@ function account(user) {
         // private mode: the small player asks for a name
     }
     $('account').textContent = `${user.name} ▾`
+    $('account').title = `Signed in as ${user.name}`
     $('adminLink').hidden = !user.admin
     $('logout').onclick = async () => {
         await postJson('/api/logout', {}).catch(() => {})
@@ -117,10 +125,17 @@ function account(user) {
     }
 }
 
+/** The guest link; its key renews daily, so the page always shows the current one. */
+function showLink(link) {
+    if (link) {
+        $('link').value = link
+    }
+}
+
 function showPassword(password) {
     $('roomPassword').value = password
-    $('savePassword').textContent = password ? 'Change' : 'Set'
-    $('passwordNote').textContent = password ? `Guests must enter “${password}”.` : 'Anyone with the link can join.'
+    $('savePassword').textContent = 'Change'
+    $('passwordNote').textContent = `Guests need the link and the password “${password}”. Share the password separately from the link.`
 }
 
 function manage(room) {
@@ -131,13 +146,15 @@ function manage(room) {
         const password = $('roomPassword').value.trim()
         try {
             await postJson(`/api/rooms/${roomId}/password`, { password })
+            room.password = password
             showPassword(password)
         } catch (err) {
             showStatus(err.message)
+            showPassword(room.password) // back to the one that still applies
         }
     }
-    const url = `${location.origin}/r/${roomId}`
-    $('link').value = url
+    const url = `${location.origin}/r/${roomId}` // the host needs no invite key
+    showLink(room.link)
     $('open').href = url // fallback where an iframe can't go fullscreen (iPhone)
     $('miniPlayer').src = url
     $('open').onclick = (event) => {
@@ -148,7 +165,7 @@ function manage(room) {
     }
     $('copy').onclick = async () => {
         if (navigator.clipboard) {
-            await navigator.clipboard.writeText(url)
+            await navigator.clipboard.writeText($('link').value)
         } else {
             // plain http on a LAN address is not a secure context: no Clipboard API
             $('link').select()
@@ -170,6 +187,9 @@ function manage(room) {
     }
 
     socket = connectRoom(roomId, 'Host', (msg) => {
+        if (msg.type === 'welcome' || msg.type === 'invite') {
+            showLink(msg.link)
+        }
         if (msg.type === 'welcome') {
             showStatus('')
             $('announceRow').hidden = !msg.discord
@@ -381,29 +401,47 @@ async function toggleWatchlist(id) {
     }
 }
 
+/** Library items for suggested TMDB titles (null: not in the library), looked up once each. */
+const matches = new Map()
+
+function match(s) {
+    const key = `${s.type}:${s.tmdbId}`
+    if (!matches.has(key)) {
+        matches.set(key, api(`/api/match?type=${s.type}&tmdb=${encodeURIComponent(s.tmdbId)}`).catch(() => null))
+    }
+    return matches.get(key)
+}
+
 function renderSuggestions(suggestions) {
     $('suggestPanel').hidden = suggestions.length === 0
-    const dismiss = (id) => socket.send({ type: 'dismissSuggestion', itemId: id })
-    $('suggestions').replaceChildren(...suggestions.toReversed().map(s => li(`${s.name} · ${s.by}`,
-        button('+', () => {
-            addItem(s.id)
-            dismiss(s.id)
-        }, { title: 'Add to the queue', className: 'primary' }),
-        button('🗳', () => {
-            if (!voteDraft.some(o => o.id === s.id) && voteDraft.length < 4) {
-                voteDraft.push({ id: s.id, name: s.name })
+    const dismiss = (s) => socket.send({ type: 'dismissSuggestion', tmdbId: s.tmdbId })
+    $('suggestions').replaceChildren(...suggestions.toReversed().map((s) => {
+        const row = li(`${s.name} · ${s.by}`, button('✕', () => dismiss(s), { title: 'Dismiss' }))
+        match(s).then((item) => {
+            if (!item) {
+                row.insertBefore(el('span', 'muted small', 'not in library'), row.lastChild)
+                return
             }
-            dismiss(s.id)
-            renderVote()
-        }, { title: 'Add to the vote', disabled: voteDraft.length >= 4 }),
-        button('☆', async () => {
-            if (!onWatchlist.has(s.id)) {
-                await toggleWatchlist(s.id)
-            }
-            dismiss(s.id)
-        }, { title: 'Save to the watchlist' }),
-        button('✕', () => dismiss(s.id), { title: 'Dismiss' }),
-    )))
+            row.insertBefore(button('+', () => {
+                addItem(item.id)
+                dismiss(s)
+            }, { title: 'Add to the queue', className: 'primary' }), row.lastChild)
+            row.insertBefore(button('🗳', () => {
+                if (!voteDraft.some(o => o.id === item.id) && voteDraft.length < 4) {
+                    voteDraft.push({ id: item.id, name: item.name })
+                }
+                dismiss(s)
+                renderVote()
+            }, { title: 'Add to the vote', disabled: voteDraft.length >= 4 }), row.lastChild)
+            row.insertBefore(button('☆', async () => {
+                if (!onWatchlist.has(item.id)) {
+                    await toggleWatchlist(item.id)
+                }
+                dismiss(s)
+            }, { title: 'Save to the watchlist' }), row.lastChild)
+        })
+        return row
+    }))
 }
 
 // --- votes: the host picks 2–4 titles, guests vote in the player, the winner plays next ---

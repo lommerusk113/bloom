@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title>Bloom</title>
 <link rel="icon" href="/web/logo.svg" type="image/svg+xml">
 <link rel="manifest" href="/web/manifest.webmanifest">
@@ -17,48 +18,33 @@
 <main class="host">
     <p id="jfError" class="banner error" hidden></p>
 
-    <section id="login" class="card" hidden>
-        <h1 class="brand-title"><img src="/web/logo.svg" alt=""> Bloom</h1>
-        <p class="muted">Watch Jellyfin together. Log in to create a room and pick something.</p>
-        <form id="loginForm" class="stack">
-            <input id="username" placeholder="Jellyfin username" autocomplete="username" required autofocus>
-            <input id="password" type="password" placeholder="Jellyfin password" autocomplete="current-password">
-            <button class="primary">Log in</button>
-            <p class="muted small">Use your Jellyfin account.</p>
+    <section id="login" class="login" hidden>
+        <div id="loginArt" class="login-art" aria-hidden="true"></div>
+        <form id="loginForm" class="login-card">
+            <img class="login-logo" src="/web/logo.svg" alt="">
+            <h1>Bloom</h1>
+            <p id="loginServer" class="muted">Sign in with your Jellyfin account</p>
+            <label>Username<input id="username" autocomplete="username" required autofocus></label>
+            <label>Password<input id="password" type="password" autocomplete="current-password"></label>
+            <p id="loginError" class="error" role="alert"></p>
+            <button class="primary">Sign in</button>
+            <p class="muted small">Got an invite link? Just open it, no account needed.</p>
         </form>
-        <p id="loginError" class="error"></p>
-    </section>
-
-    <section id="lobby" hidden>
-        <header class="top">
-            <h1 class="brand-title"><img src="/web/logo.svg" alt=""> Bloom</h1>
-            <div class="row">
-                <a id="adminLink" class="button" href="/admin" hidden>Admin</a>
-                <details class="menu">
-                    <summary id="account" aria-label="Account"></summary>
-                    <div class="menu-panel">
-                        <button id="logout">Log out</button>
-                    </div>
-                </details>
-                <button id="newRoom" class="primary">+ New room</button>
-            </div>
-        </header>
-        <p class="muted">A room is one shared screen: everyone in it watches the same thing at the same moment. Rooms nobody is in close after 5 minutes.</p>
-        <ul id="rooms" class="list"></ul>
-        <p id="noRooms" class="empty" hidden>No rooms yet. Create one to get a link you can share.</p>
     </section>
 
     <section id="manage" class="app" hidden>
         <header class="appbar">
-            <a href="/" class="brand" title="All rooms"><img src="/web/logo.svg" alt=""> Bloom</a>
+            <a href="/" class="brand" title="Home"><img src="/web/logo.svg" alt=""> Bloom</a>
             <nav id="libraries" class="tabs"></nav>
             <form id="searchForm" class="search">
                 <input id="q" type="search" placeholder="Search" required aria-label="Search the library">
             </form>
             <div class="appbar-actions">
+                <a id="adminLink" class="button" href="/admin" hidden>Admin</a>
                 <details class="menu">
-                    <summary aria-label="More options">⋯</summary>
+                    <summary id="account" aria-label="Account and room options">⋯</summary>
                     <div class="menu-panel">
+                        <button id="logout">Sign out</button>
                         <button id="endRoom" class="danger">End room for everyone</button>
                     </div>
                 </details>
@@ -97,7 +83,7 @@
                     </div>
                     <a id="open" class="button open-player" target="_blank" rel="noopener">⛶ Watch fullscreen</a>
                     <form id="passwordForm" class="row">
-                        <input id="roomPassword" placeholder="Password (optional)" maxlength="100" autocomplete="off" aria-label="Room password">
+                        <input id="roomPassword" placeholder="Room password" minlength="4" maxlength="100" required autocomplete="off" aria-label="Room password">
                         <button id="savePassword">Set</button>
                     </form>
                     <p id="passwordNote" class="muted small"></p>

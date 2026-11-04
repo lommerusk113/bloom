@@ -24,8 +24,11 @@ export type Room = {
     startsAt: number | null
     /** Post to the server's Discord channel when the room opens, is scheduled, and starts something. */
     announce: boolean
-    /** Titles guests suggested from the player, newest last, for the host to queue, vote on or dismiss. */
-    suggestions: Array<{ id: string; name: string; by: string }>
+    /**
+     * Titles guests suggested from TMDB's catalogue, newest last. Whether the library has one is looked up by the
+     * host's page only (/api/match), so guests never learn what the library holds.
+     */
+    suggestions: Array<{ tmdbId: string; type: 'Movie' | 'Series'; name: string; by: string }>
 }
 
 export type Vote = { options: Array<{ id: string; name: string }>; ballots: Record<string, number>; endsAt: number }
