@@ -48,10 +48,11 @@
             <div class="muted small">Vote: what's next? · <span id="voteIn"></span></div>
             <div id="voteOptions" class="vote-options"></div>
         </div>
+        <button id="chatPing" class="chat-ping" title="New chat messages" aria-label="New chat messages" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/></svg><span id="chatPingCount"></span></button>
         <div id="reactionLayer" class="reaction-layer" aria-hidden="true"></div>
         <div class="osd">
             <header class="osd-top">
-                <a id="manage" class="osd-back" hidden title="Back to the room settings: queue, invite, end room">‹ Room settings</a>
+                <a id="manage" class="osd-back" href="#" hidden title="Back to the room settings: queue, invite, end room">‹ Room settings</a>
                 <div class="grow">
                     <div id="title" class="osd-title">Waiting for the host to pick something…</div>
                     <div id="lock" class="osd-sub" hidden>Only the host can control playback</div>
@@ -98,7 +99,6 @@
                     <span id="subOffset">0.0s</span>
                     <button id="subLater" title="Show subtitles later">+0.5s</button>
                 </div>
-                <button id="findSubs" class="link">Find more subtitles…</button>
                 <form id="subSearch" class="sub-search" hidden>
                     <div class="row">
                         <select id="subLang" aria-label="Subtitle language"></select>
@@ -120,6 +120,13 @@
             </div>
         </div>
     </div>
+    <dialog id="suggestDialog" class="dialog suggest-dialog" aria-label="Suggest a title">
+        <form method="dialog" class="dialog-close"><button aria-label="Close">✕</button></form>
+        <h2>Suggest a title</h2>
+        <p class="muted small">The host sees it and can queue it.</p>
+        <input id="suggestSearch" type="search" placeholder="Search movies and shows" aria-label="Search movies and shows" autocomplete="off">
+        <div id="suggestResults" class="catalogue suggest-results"></div>
+    </dialog>
     <aside id="chat" class="chat" hidden aria-label="Chat">
         <header class="chat-head">
             <strong>Chat</strong>
@@ -127,10 +134,6 @@
             <button id="chatClose" class="icon" title="Close chat" aria-label="Close chat">✕</button>
         </header>
         <ol id="chatLog" class="chat-log" aria-live="polite"></ol>
-        <div id="suggestPicker" class="gif-picker" hidden>
-            <input id="suggestSearch" type="search" placeholder="Search movies and shows" aria-label="Search movies and shows">
-            <ul id="suggestResults" class="suggest-results"></ul>
-        </div>
         <div id="gifPicker" class="gif-picker" hidden>
             <input id="gifSearch" type="search" placeholder="Search GIPHY" aria-label="Search GIFs">
             <div id="gifResults" class="gif-results"></div>

@@ -17,10 +17,10 @@ export function setupChat(ctx) {
         if (open) {
             unread = 0
             $('unread').hidden = true
+            $('chatPing').hidden = true
             $('chatLog').scrollTop = $('chatLog').scrollHeight
         } else {
             $('gifPicker').hidden = true
-            $('suggestPicker').hidden = true
         }
     }
 
@@ -74,16 +74,9 @@ export function setupChat(ctx) {
             unread++
             $('unread').textContent = unread > 9 ? '9+' : String(unread)
             $('unread').hidden = false
+            $('chatPingCount').textContent = $('unread').textContent
+            $('chatPing').hidden = false
         }
-    }
-
-    // pickers: GIFs and suggestions share the space above the input, one at a time
-    function showPicker(id) {
-        const show = $(id).hidden
-        $('gifPicker').hidden = true
-        $('suggestPicker').hidden = true
-        $(id).hidden = !show
-        return show
     }
 
     const searchGifs = debounced(350, async (term) => {
@@ -110,25 +103,45 @@ export function setupChat(ctx) {
         return () => $('suggestResults').replaceChildren(...found.map((t) => {
             const pick = document.createElement('button')
             pick.type = 'button'
-            const title = document.createElement('span')
-            title.textContent = t.name
+            pick.className = 'tile'
+            pick.title = `Suggest ${t.name}`
+            const art = document.createElement('div')
+            art.className = 'art'
+            const badge = document.createElement('span')
+            badge.className = 'badge'
+            badge.textContent = '+'
+            if (t.poster) {
+                art.append(image(t.poster, ''))
+            } else {
+                const none = document.createElement('span')
+                none.className = 'placeholder'
+                none.textContent = t.name
+                art.append(none)
+            }
+            art.append(badge)
+            const name = document.createElement('span')
+            name.textContent = t.name
             const kind = document.createElement('small')
             kind.textContent = t.type === 'Series' ? 'Show' : 'Movie'
-            const text = document.createElement('div')
-            text.append(title, kind)
-            pick.append(image(t.poster, ''), text)
+            pick.append(art, name, kind)
             pick.onclick = () => {
                 ctx.send({ type: 'suggest', tmdbId: t.tmdbId, kind: t.type })
                 pick.disabled = true
-                title.textContent = `✓ Suggested ${t.name}`
+                pick.classList.add('added')
+                badge.textContent = '✓'
+                kind.textContent = 'Suggested'
             }
-            return listItem('', pick)
+            return pick
         }))
     })
 
     $('chatButton').onclick = (event) => {
         event.stopPropagation()
         setOpen($('chat').hidden)
+    }
+    $('chatPing').onclick = (event) => {
+        event.stopPropagation()
+        setOpen(true)
     }
     $('chatClose').onclick = () => setOpen(false)
     $('chatForm').onsubmit = (event) => {
@@ -142,24 +155,31 @@ export function setupChat(ctx) {
     $('chat').onclick = (event) => event.stopPropagation() // clicks in the chat don't toggle playback or close menus
     $('chat').onkeydown = (event) => event.stopPropagation() // typing a space doesn't pause
     $('gifButton').onclick = () => {
-        if (showPicker('gifPicker')) {
+        $('gifPicker').hidden = !$('gifPicker').hidden
+        if (!$('gifPicker').hidden) {
             $('gifSearch').value = ''
             $('gifSearch').focus()
             searchGifs('')
         }
     }
     $('gifSearch').oninput = () => searchGifs($('gifSearch').value)
+    // suggesting opens over the movie, for this viewer only
+    const dialog = $('suggestDialog')
     $('suggestButton').onclick = () => {
-        if (showPicker('suggestPicker')) {
-            $('suggestSearch').focus()
+        dialog.showModal()
+        $('suggestSearch').select()
+    }
+    dialog.onclick = (event) => {
+        event.stopPropagation() // not a click on the player
+        if (event.target === dialog) {
+            dialog.close() // the backdrop
         }
     }
+    dialog.onkeydown = event => event.key === 'Escape' || event.stopPropagation() // typing a space doesn't pause
     $('suggestSearch').oninput = () => searchTitles($('suggestSearch').value.trim())
-    for (const id of ['gifSearch', 'suggestSearch']) {
-        $(id).onkeydown = (event) => {
-            if (event.key === 'Enter') {
-                event.preventDefault() // not a chat send
-            }
+    $('gifSearch').onkeydown = (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault() // not a chat send
         }
     }
     setOpen(!ctx.small && recall('wp_chat') === '1')

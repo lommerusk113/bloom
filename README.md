@@ -41,12 +41,14 @@ Bloom never encodes video itself. Every guest gets an HLS stream from Jellyfin (
 | `TMDB_API_KEY` | no | Free key from themoviedb.org (Settings → API); adds “Trending this week” and “Popular right now” rows for titles in your library |
 | `GIPHY_API_KEY` | no | Free key from developers.giphy.com (Create an App → API); adds GIF search to the chat |
 | `DISCORD_WEBHOOK_URL` | no | A Discord channel webhook (Channel settings → Integrations → Webhooks); hosts can then announce their room there |
+| `JELLYSEERR_URL` | no | Jellyseerr (or Overseerr) URL, e.g. `http://jellyseerr:5055`; with `JELLYSEERR_API_KEY` (Settings → General → API Key), hosts can request guest suggestions the library lacks |
+| `JELLYSEERR_API_KEY` | no | See `JELLYSEERR_URL` |
 | `PORT` | no | Default `8080` |
 
 ## Deploy with Coolify
 
 1. **New resource → Public/Private repository** → this repo, build pack **Docker Compose**, compose file `docker-compose.yml`.
-2. Under **Environment Variables**, fill in `JELLYFIN_URL` and `JELLYFIN_API_KEY` (required), and optionally `TMDB_API_KEY`, `GIPHY_API_KEY`, `DISCORD_WEBHOOK_URL` and `JELLYFIN_USER_ID`.
+2. Under **Environment Variables**, fill in `JELLYFIN_URL` and `JELLYFIN_API_KEY` (required), and optionally `TMDB_API_KEY`, `GIPHY_API_KEY`, `DISCORD_WEBHOOK_URL`, `JELLYSEERR_URL`, `JELLYSEERR_API_KEY` and `JELLYFIN_USER_ID`.
 3. Set the domain for the `bloom` service (Coolify fills `SERVICE_FQDN_BLOOM_8080`, which also becomes `PUBLIC_URL`) and deploy.
 
 Behind **Pangolin** (or another proxy outside Coolify) skip the Coolify domain: set `PUBLIC_URL` to the public address and point the proxy at `http://<server-ip>:8765` (`HOST_PORT` changes 8765). In Pangolin turn off authentication for the resource, or guests get a Pangolin login instead of Bloom.

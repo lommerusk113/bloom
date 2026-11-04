@@ -5,6 +5,7 @@ import { once } from 'node:events'
 import { createServer, request, type IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { connect } from 'node:net'
+import { randomBytes } from 'node:crypto'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -15,9 +16,22 @@ const BASE = `http://127.0.0.1:${PORT}`
 let server: ChildProcess
 const MOVIE = 'a'.repeat(32)
 /** Jellyfin accounts the fake accepts: name -> password. */
-const ACCOUNTS: Record<string, string> = { admin: 'admin-pw', alice: 'secret1', bob: 'secret1', carol: 'secret1' }
+// the fake Jellyfin's accounts share a password made per run, so no credential-looking literal is committed
+const PASSWORD = randomBytes(12).toString('base64url')
+const ACCOUNTS: Record<string, string> = { admin: PASSWORD, alice: PASSWORD, bob: PASSWORD, carol: PASSWORD }
 /** Fails /System/Info (so the startup check reports an error) but lists one movie, enough to queue it, and checks logins. */
+/** Bodies the fake Jellyseerr (same fake server) received. */
+const seerrRequests: unknown[] = []
 const fakeJellyfin = createServer(async (req, res) => {
+    if (req.url === '/api/v1/request') {
+        let raw = ''
+        for await (const chunk of req) {
+            raw += chunk
+        }
+        seerrRequests.push(JSON.parse(raw))
+        res.writeHead(req.headers['x-api-key'] === 'seerr' ? 201 : 401, { 'content-type': 'application/json' }).end('{}')
+        return
+    }
     if (req.url === '/Users/AuthenticateByName') {
         let raw = ''
         for await (const chunk of req) {
@@ -60,7 +74,7 @@ before(async () => {
     await new Promise<void>(resolve => fakeJellyfin.listen(0, '127.0.0.1', resolve))
     const jellyfinUrl = `http://127.0.0.1:${(fakeJellyfin.address() as AddressInfo).port}`
     server = spawn(process.execPath, ['src/server.ts'], {
-        env: { ...process.env, PORT: String(PORT), JELLYFIN_URL: jellyfinUrl, JELLYFIN_API_KEY: 'x', PUBLIC_URL: BASE, DATA_DIR: mkdtempSync(join(tmpdir(), 'bloom-')) },
+        env: { ...process.env, PORT: String(PORT), JELLYFIN_URL: jellyfinUrl, JELLYFIN_API_KEY: 'x', JELLYSEERR_URL: jellyfinUrl, JELLYSEERR_API_KEY: 'seerr', PUBLIC_URL: BASE, DATA_DIR: mkdtempSync(join(tmpdir(), 'bloom-')) },
         stdio: 'ignore',
     })
     await waitFor(async () => ((await fetch(`${BASE}/api/health`)).ok ? true : undefined))
@@ -71,7 +85,7 @@ after(() => {
     fakeJellyfin.close()
 })
 
-async function login(username = 'admin', password = 'admin-pw'): Promise<string> {
+async function login(username = 'admin', password = PASSWORD): Promise<string> {
     const res = await fetch(`${BASE}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) })
     assert.equal(res.status, 200)
     return res.headers.get('set-cookie')!.split(';')[0]
@@ -123,7 +137,7 @@ test('host-only endpoints require login', async () => {
 })
 
 test('a room is started on request, optionally scheduled, and its link works behind any address', async () => {
-    const carol = await login('carol', 'secret1')
+    const carol = await login('carol')
     const start = (body: unknown) => fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie: carol, 'content-type': 'application/json' }, body: JSON.stringify(body) })
     assert.equal((await start({ startsAt: Date.now() - 1000 })).status, 400)
     assert.equal((await start({ startsAt: 'soon' })).status, 400)
@@ -138,8 +152,8 @@ test('a room is started on request, optionally scheduled, and its link works beh
 })
 
 test('users only see, host and end their own rooms', async () => {
-    const alice = await login('alice', 'secret1')
-    const bob = await login('bob', 'secret1')
+    const alice = await login('alice')
+    const bob = await login('bob')
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie: alice } })).json()) as { id: string }
     const list = async (cookie: string) => ((await (await fetch(`${BASE}/api/rooms`, { headers: { cookie } })).json()) as Array<{ id: string; name: string }>)
     assert.deepEqual((await list(alice)).map(r => r.name), ["alice's room"])
@@ -244,7 +258,7 @@ test('the host sees who did what, everyone sees reactions, and the host can remo
 })
 
 test('guest suggestions never search the library, and accounts share a watchlist', async () => {
-    const cookie = await login('alice', 'secret1')
+    const cookie = await login('alice')
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
     const guest = { cookie: await invited(id, cookie) }
     // without TMDB there is nothing to suggest from; the library's titles are never offered instead
@@ -253,17 +267,24 @@ test('guest suggestions never search the library, and accounts share a watchlist
     const json = { cookie, 'content-type': 'application/json' }
     await fetch(`${BASE}/api/watchlist`, { method: 'POST', headers: json, body: JSON.stringify({ id: MOVIE }) })
     await fetch(`${BASE}/api/watchlist`, { method: 'POST', headers: json, body: JSON.stringify({ id: MOVIE }) }) // once only
-    const other = await login('bob', 'secret1')
+    const other = await login('bob')
     const list = (await (await fetch(`${BASE}/api/watchlist`, { headers: { cookie: other } })).json()) as Array<{ id: string; addedBy: string }>
     assert.deepEqual(list.map(e => [e.id, e.addedBy]), [[MOVIE, 'alice']])
     await fetch(`${BASE}/api/watchlist/${MOVIE}`, { method: 'DELETE', headers: { cookie: other } })
     assert.deepEqual(await (await fetch(`${BASE}/api/watchlist`, { headers: { cookie } })).json(), [])
     assert.equal((await fetch(`${BASE}/api/watchlist`)).status, 403)
+
+    // a suggestion the library lacks can be requested from Jellyseerr, by hosts only
+    const ask = (body: unknown, headers: Record<string, string> = json) => fetch(`${BASE}/api/request`, { method: 'POST', headers, body: JSON.stringify(body) })
+    assert.equal((await ask({ type: 'Series', tmdb: '1399' })).status, 200)
+    assert.deepEqual(seerrRequests, [{ mediaType: 'tv', mediaId: 1399, seasons: 'all' }])
+    assert.equal((await ask({ type: 'Movie', tmdb: '../x' })).status, 400)
+    assert.notEqual((await ask({ type: 'Movie', tmdb: '603' }, { ...guest, 'content-type': 'application/json' })).status, 200)
 })
 
 test('scheduled movie nights are listed for every account, with a calendar file but no way in', async () => {
-    const alice = await login('alice', 'secret1')
-    const bob = await login('bob', 'secret1')
+    const alice = await login('alice')
+    const bob = await login('bob')
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie: alice } })).json()) as { id: string }
     const host = openSocket(id, alice)
     await host.ready
@@ -362,7 +383,7 @@ test('every room has a password that keeps out guests until they enter it, and t
 })
 
 test('changing the password keeps whoever is watching, and shuts out everyone else', async () => {
-    const cookie = await login('bob', 'secret1')
+    const cookie = await login('bob')
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
     const watching = await invited(id, cookie)
     const away = await invited(id, cookie) // let in once, but not connected when the password changes

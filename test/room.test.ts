@@ -165,6 +165,9 @@ test('a scheduled room starts by itself and is kept while it waits', () => {
     assert.equal(apply(room, { type: 'schedule', at: -5 }, true, 0), false) // in the past
     assert.equal(apply(room, { type: 'schedule', at: ROOM_TTL_MS * 3 }, true, 0), true)
     assert.equal(apply(room, { type: 'schedule', at: null }, false, 0), false) // host only
+    assert.equal(apply(room, { type: 'play' }, true, 0), false) // nobody starts it early
+    apply(room, { type: 'jump', index: 0 }, true, 0)
+    assert.equal(room.playing, false)
     const emptySince = new Map<string, number>()
     sweepRooms(rooms, () => 0, emptySince, 0)
     sweepRooms(rooms, () => 0, emptySince, ROOM_TTL_MS * 2) // empty, but its start is still ahead

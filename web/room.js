@@ -173,8 +173,13 @@ function onMessage(msg) {
         if (speedMbps !== null) {
             socket.send({ type: 'speed', value: speedMbps })
         }
-        $('manage').hidden = !isHost || (frame && !screenDoc.fullscreenElement)
-        $('manage').href = `/?room=${roomId}`
+        if (isHost && !frame) {
+            // the host watches inside the room settings page, so going back and forth never reloads the movie
+            socket.close()
+            location.replace(`/?room=${roomId}#player`)
+            return
+        }
+        showManage()
         $('status').textContent = ''
         return
     }
@@ -435,12 +440,15 @@ function fill(select, options, selected) {
     select.replaceChildren(...options.map(([value, label]) => new Option(label, value, false, value === selected)))
 }
 
+const FIND_SUBS = 'find' // the last subtitle option opens the subtitle search
+
 function fillPickers() {
     const streams = current.source.MediaStreams
     fill($('audio'), streams.filter(m => m.Type === 'Audio').map(m => [m.Index, m.DisplayTitle]), prefs.audio)
     fill($('subs'), [
         [-1, 'No subtitles'],
         ...streams.filter(m => m.Type === 'Subtitle').map(m => [m.Index, m.DisplayTitle + (m.IsTextSubtitleStream ? '' : ' (burned in)')]),
+        [FIND_SUBS, 'Find more subtitles…'],
     ], prefs.subs)
 }
 
@@ -453,6 +461,11 @@ $('audio').onchange = () => {
 }
 $('subs').onchange = () => {
     if (!current) {
+        return
+    }
+    if ($('subs').value === FIND_SUBS) {
+        $('subs').value = String(prefs.subs) // not a track: keep showing the one in use
+        $('subSearch').hidden = false
         return
     }
     const previous = prefs.subs
@@ -659,9 +672,6 @@ $('mute').onclick = () => {
 const LANGUAGES = { eng: 'English', nor: 'Norwegian', swe: 'Swedish', dan: 'Danish', fin: 'Finnish', ger: 'German', fre: 'French', spa: 'Spanish', ita: 'Italian', dut: 'Dutch', por: 'Portuguese', pol: 'Polish', jpn: 'Japanese', kor: 'Korean', chi: 'Chinese' }
 const BROWSER_LANGUAGES = { en: 'eng', nb: 'nor', nn: 'nor', no: 'nor', sv: 'swe', da: 'dan', fi: 'fin', de: 'ger', fr: 'fre', es: 'spa', it: 'ita', nl: 'dut', pt: 'por', pl: 'pol', ja: 'jpn', ko: 'kor', zh: 'chi' }
 fill($('subLang'), Object.entries(LANGUAGES), recall('wp_sub_lang') ?? BROWSER_LANGUAGES[navigator.language.slice(0, 2)] ?? 'eng')
-$('findSubs').onclick = () => {
-    $('subSearch').hidden = !$('subSearch').hidden
-}
 $('subSearch').onsubmit = async (event) => {
     event.preventDefault()
     const lang = $('subLang').value
@@ -720,15 +730,21 @@ $('fullscreen').onclick = () => {
         video.webkitEnterFullscreen?.()
     }
 }
+/** "Room settings" shows while the settings page's player covers it (grown over the page, or fullscreen). */
+function showManage() {
+    $('manage').hidden = !isHost || !frame || !(frame.classList.contains('expanded') || screenDoc.fullscreenElement)
+}
 if (frame) {
-    // the settings page is right behind the fullscreen player: "Room settings" just leaves fullscreen
+    // the settings page is right behind the player: "Room settings" just shrinks it back into the page
     $('manage').onclick = (event) => {
         event.preventDefault()
-        screenDoc.exitFullscreen()
+        if (screenDoc.fullscreenElement) {
+            screenDoc.exitFullscreen()
+        }
+        frame.classList.remove('expanded')
     }
-    screenDoc.addEventListener('fullscreenchange', () => {
-        $('manage').hidden = !isHost || !screenDoc.fullscreenElement
-    })
+    screenDoc.addEventListener('fullscreenchange', showManage)
+    new MutationObserver(showManage).observe(frame, { attributes: true, attributeFilter: ['class'] })
 }
 // keyboard shortcuts, like Jellyfin's; never while typing
 const KEYS = {
@@ -776,6 +792,7 @@ function render() {
     for (const id of CONTROLS) {
         $(id).disabled = !mayControl || !item
     }
+    $('toggle').disabled ||= !$('countdown').hidden // a scheduled room starts by itself
     $('toggle').querySelector('path').setAttribute('d', room.playing ? PAUSE_ICON : PLAY_ICON)
     $('seek').max = String(Math.floor(item?.runtime ?? 0))
     $('title').textContent = item?.name ?? (room.startsAt ? '' : 'Waiting for the host to pick something…') // a scheduled room shows its countdown
@@ -815,7 +832,10 @@ function noteStall() {
 /** A scheduled room: a big countdown until it starts by itself. */
 function showCountdown(room) {
     const left = room.startsAt ? room.startsAt - socket.serverNow() : 0
-    $('countdown').hidden = left <= 0
+    if ($('countdown').hidden !== left <= 0) {
+        $('countdown').hidden = left <= 0
+        render() // play is locked while it counts down
+    }
     if (left > 0) {
         const s = Math.ceil(left / 1000)
         const days = Math.floor(s / 86_400)

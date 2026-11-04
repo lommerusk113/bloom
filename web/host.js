@@ -182,13 +182,12 @@ function manage(room) {
     }
     const url = `${location.origin}/r/${roomId}` // the host needs no invite key
     showLink(room.link)
-    $('open').href = url // fallback where an iframe can't go fullscreen (iPhone)
     $('miniPlayer').src = url
-    $('open').onclick = (event) => {
-        if ($('miniPlayer').requestFullscreen) {
-            event.preventDefault()
-            $('miniPlayer').requestFullscreen()
-        }
+    // the player and the settings are one page: the small player grows over it, and its "Room settings" shrinks it back
+    $('open').onclick = () => $('miniPlayer').classList.add('expanded')
+    if (location.hash === '#player') {
+        $('miniPlayer').classList.add('expanded') // sent here from the room's own page
+        history.replaceState(null, '', location.pathname + location.search)
     }
     $('copy').onclick = async () => {
         if (navigator.clipboard) {
@@ -220,6 +219,7 @@ function manage(room) {
         if (msg.type === 'welcome') {
             showStatus('')
             $('announceRow').hidden = !msg.discord
+            canRequest = msg.requests
         } else if (msg.type === 'error') {
             showStatus(msg.message)
         } else if (msg.type === 'gone') {
@@ -433,6 +433,8 @@ function match(s) {
     return matches.get(key)
 }
 
+let canRequest = false // Jellyseerr is set up
+
 function renderSuggestions(suggestions) {
     $('suggestPanel').hidden = suggestions.length === 0
     $('queueBadge').hidden = suggestions.length === 0
@@ -443,6 +445,19 @@ function renderSuggestions(suggestions) {
         match(s).then((item) => {
             if (!item) {
                 row.insertBefore(el('span', 'muted small', 'not in library'), row.lastChild)
+                if (canRequest) {
+                    const ask = button('Request', async () => {
+                        ask.disabled = true
+                        try {
+                            await postJson('/api/request', { type: s.type, tmdb: s.tmdbId })
+                            ask.textContent = '✓ Requested'
+                        } catch (error) {
+                            ask.textContent = 'Failed'
+                            ask.title = error.message
+                        }
+                    }, { title: 'Ask Jellyseerr to get it' })
+                    row.insertBefore(ask, row.lastChild)
+                }
                 return
             }
             row.insertBefore(button('+', () => {
@@ -727,6 +742,7 @@ function renderTime() {
         $('nowTime').textContent = 'Click a poster to add it'
         return
     }
+    $('toggle').disabled = state.room.startsAt > socket.serverNow() // a scheduled room starts by itself
     const position = Math.min(targetPosition(state.room, socket.serverNow()), item.runtime || Infinity)
     const mode = state.room.waiting ? `Waiting for ${state.waitingFor.join(', ')}` : state.room.playing ? 'Playing' : 'Paused'
     $('nowTime').textContent = `${mode} · ${clock(position)} / ${clock(item.runtime)}`

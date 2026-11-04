@@ -77,6 +77,6 @@ function title(r: TmdbResult): TmdbTitle {
         type: r.media_type === 'tv' ? 'Series' : 'Movie',
         name: year ? `${r.title ?? r.name} (${year})` : (r.title ?? r.name ?? ''),
         year,
-        poster: r.poster_path ? `https://image.tmdb.org/t/p/w92${r.poster_path}` : null,
+        poster: r.poster_path ? `https://image.tmdb.org/t/p/w185${r.poster_path}` : null,
     }
 }

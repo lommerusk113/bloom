@@ -277,7 +277,7 @@ export function parseCommand(input: unknown): Command | null {
 
 function setPlayback(room: Room, playing: boolean, position: number, now: number): boolean {
 
-    if (!room.queue[room.index]) {
+    if (!room.queue[room.index] || (playing && startsLater(room, now))) {
         return false
     }
 
@@ -286,6 +286,11 @@ function setPlayback(room: Room, playing: boolean, position: number, now: number
     room.updatedAt = now
 
     return true
+}
+
+/** A scheduled start still ahead: nothing plays until the room starts by itself (or the host cancels the schedule). */
+function startsLater(room: Room, now: number): boolean {
+    return room.startsAt !== null && now < room.startsAt
 }
 
 function jumpTo(room: Room, index: number, now: number): boolean {
@@ -303,7 +308,7 @@ function jumpTo(room: Room, index: number, now: number): boolean {
 
     room.index = index
     room.position = 0
-    room.playing = true
+    room.playing = !startsLater(room, now) // picking a title during the countdown doesn't start it early
     room.updatedAt = now
 
     return true

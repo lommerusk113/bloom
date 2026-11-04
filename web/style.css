@@ -79,6 +79,7 @@ video { width: 100%; height: 100%; object-fit: contain; display: block; }
 #seek, #volume { flex: 1; appearance: none; height: 4px; padding: 0; border: none; border-radius: 2px; cursor: pointer;
     background: linear-gradient(to right, var(--accent) var(--pct, 0%), rgb(255 255 255 / .3) var(--pct, 0%)); }
 #seek:hover, #volume:hover { height: 6px; }
+#seek:focus, #volume:focus { outline: none; }
 #seek::-webkit-slider-thumb, #volume::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: none; }
 #seek::-moz-range-thumb, #volume::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: none; }
 .volume { display: flex; align-items: center; }
@@ -99,7 +100,11 @@ button.icon svg { width: 26px; height: 26px; fill: currentColor; }
 button.icon.big svg { width: 34px; height: 34px; }
 .osd-panel { position: absolute; right: 20px; bottom: 96px; display: grid; gap: 10px; min-width: 240px; padding: 14px; border-radius: 12px; background: rgb(28 28 28 / .95); box-shadow: 0 8px 24px rgb(0 0 0 / .5); }
 .osd-panel label { display: grid; gap: 4px; font-size: .85em; color: #bbb; }
-.osd-panel select { width: 100%; }
+.osd-panel select { width: 100%; appearance: none; cursor: pointer; padding: 8px 32px 8px 10px; color: #fff; font-size: 1.1em; border: 1px solid rgb(255 255 255 / .12); border-radius: 8px;
+    background: rgb(255 255 255 / .08) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23bbb'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E") no-repeat right 8px center / 20px; }
+.osd-panel select:hover { background-color: rgb(255 255 255 / .14); }
+.osd-panel select:focus { outline: none; border-color: rgb(255 255 255 / .45); }
+.osd-panel option { background: #1c1c1c; color: #fff; }
 google-cast-launcher { display: inline-block; width: 26px; height: 26px; margin: 0 9px; cursor: pointer; --connected-color: var(--accent); --disconnected-color: #fff; }
 @media (max-width: 560px) {
     .osd-top, .osd-bottom { padding-left: 12px; padding-right: 12px; }
@@ -129,6 +134,8 @@ google-cast-launcher { display: inline-block; width: 26px; height: 26px; margin:
 .tile .badge { position: absolute; right: 6px; bottom: 6px; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: var(--accent); color: var(--accent-text); font-weight: 700; opacity: 0; transition: opacity .15s; }
 .tile:hover .badge, .tile:focus-visible .badge, .tile.added .badge { opacity: 1; }
 .tile.added .badge { background: var(--ok); }
+.tile.added:disabled { opacity: 1; }
+.suggest-dialog .dialog-close { position: absolute; top: 14px; right: 14px; margin: 0; }
 .tile-title { font-weight: 600; font-size: .92em; line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tile-sub { font-size: .8em; color: var(--muted); }
 .tile:hover, .tile:hover:not(:disabled) { border: none; }
@@ -171,12 +178,24 @@ google-cast-launcher { display: inline-block; width: 26px; height: 26px; margin:
 .gif-results button { padding: 0; border: 0; border-radius: 6px; overflow: hidden; background: #222; aspect-ratio: 1; cursor: pointer; }
 .gif-results img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .chat-head .link { margin-left: auto; margin-right: 6px; font-size: .85em; }
-.suggest-results { display: grid; gap: 4px; max-height: 240px; overflow-y: auto; overflow-x: hidden; margin: 0; padding: 0; list-style: none; }
-.suggest-results button { width: 100%; display: flex; align-items: center; gap: 10px; text-align: left; }
-.suggest-results button div { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
-.suggest-results img { width: 34px; height: 51px; object-fit: cover; border-radius: 4px; background: #222; flex: none; }
-.suggest-results small { color: #999; }
+.suggest-dialog { width: min(760px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 48px)); display: flex; flex-direction: column; background: rgb(24 24 27 / .96); backdrop-filter: blur(12px); }
+.suggest-dialog:not([open]) { display: none; }
+.suggest-dialog::backdrop { background: rgb(0 0 0 / .55); backdrop-filter: blur(3px); }
+.suggest-dialog #suggestSearch { width: 100%; padding: 12px 14px; font-size: 1.1em; border-radius: 10px; }
+.suggest-dialog #suggestSearch:focus { outline: none; border-color: var(--muted); }
+.suggest-results { flex: 1; min-height: 0; overflow-y: auto; margin-top: 14px; padding: 4px 2px; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.suggest-results:empty::before { content: 'Start typing to find something.'; grid-column: 1 / -1; color: var(--muted); text-align: center; padding: 40px 0; }
+.suggest-results .tile small { color: var(--muted); }
+.tile.added .art { border-color: var(--ok); }
+.tile.added .badge { background: var(--ok); }
+.tile.added:disabled { opacity: 1; }
+.suggest-dialog .dialog-close { position: absolute; top: 14px; right: 14px; margin: 0; }
 .chat-button { position: relative; }
+/* unread chat while the controls are faded out (the chat button's badge covers it otherwise) */
+.chat-ping { position: absolute; z-index: 3; top: 16px; right: 16px; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border: none; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-weight: 700; box-shadow: 0 4px 14px rgb(0 0 0 / .5); animation: ping-in .25s ease-out; }
+.chat-ping svg { width: 18px; height: 18px; fill: currentColor; }
+#player:not(.idle) .chat-ping { display: none; }
+@keyframes ping-in { from { opacity: 0; transform: translateY(-8px); } }
 .unread { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 10px; line-height: 16px; font-weight: 700; }
 @media (max-width: 700px) {
     #player.chat-open .stage { right: 0; bottom: 45%; }
@@ -292,6 +311,8 @@ h2.shelf-title { margin: 0 auto 0 0; }
 .sidebar { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .mini-player { aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: #000; }
 .mini-player iframe { display: block; width: 100%; height: 100%; border: 0; }
+.mini-player iframe.expanded { position: fixed; inset: 0; z-index: 100; width: 100vw; height: 100dvh; }
+body:has(iframe.expanded) { overflow: hidden; }
 .small { font-size: .85em; }
 .host:has(> .login:not([hidden])) { max-width: none; padding: 0; }
 #jfError { position: relative; z-index: 2; }

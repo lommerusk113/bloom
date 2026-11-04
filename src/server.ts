@@ -70,6 +70,9 @@ const LANGUAGE = /^[a-z]{3}$/
 const tmdb = process.env.TMDB_API_KEY ? createTmdb(process.env.TMDB_API_KEY) : null
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY || ''
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || ''
+const JELLYSEERR_URL = (process.env.JELLYSEERR_URL || '').replace(/\/+$/, '')
+const JELLYSEERR_API_KEY = process.env.JELLYSEERR_API_KEY || ''
+const requests = JELLYSEERR_URL !== '' && JELLYSEERR_API_KEY !== ''
 /** Room passwords, kept out of Room so they are never broadcast. */
 const locks = new Map<string, { password: string; auth: ReturnType<typeof createAuth> }>()
 /**
@@ -604,6 +607,28 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         // the library's item for a TMDB title, or null: for the host's view of guests' suggestions
         return sendJson(res, 200, (await jf.byTmdb(user.id)).get(`${url.searchParams.get('type') === 'Series' ? 'Series' : 'Movie'}:${url.searchParams.get('tmdb') ?? ''}`) ?? null)
     }
+    if (method === 'POST' && path === '/api/request') {
+        // a suggestion the library lacks: ask Jellyseerr (or Overseerr) to get it
+        const { type, tmdb } = await readJson(req)
+        if (!requests) {
+            return sendJson(res, 404, { error: 'Requests are not set up' })
+        }
+        if (typeof tmdb !== 'string' || !/^\d{1,10}$/.test(tmdb)) {
+            return sendJson(res, 400, { error: 'Unknown title' })
+        }
+        const series = type === 'Series'
+        const answer = await fetch(`${JELLYSEERR_URL}/api/v1/request`, {
+            method: 'POST',
+            headers: { 'x-api-key': JELLYSEERR_API_KEY, 'content-type': 'application/json' },
+            body: JSON.stringify({ mediaType: series ? 'tv' : 'movie', mediaId: Number(tmdb), ...(series ? { seasons: 'all' } : {}) }),
+            signal: AbortSignal.timeout(10_000),
+        }).catch(() => null)
+        if (!answer?.ok) {
+            const why = (await answer?.json().catch(() => null) as { message?: string } | null)?.message
+            return sendJson(res, 502, { error: why ?? 'Jellyseerr did not answer' })
+        }
+        return sendJson(res, 200, {})
+    }
     if (method === 'GET' && path === '/api/resume') {
         return sendJson(res, 200, await jf.resume(user.id))
     }
@@ -771,7 +796,7 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean, token: string | null
     ws.on('pong', () => alive.add(ws))
     // oversized or malformed frames emit 'error'; unhandled it would crash the process
     ws.on('error', () => ws.terminate())
-    send(client, JSON.stringify({ type: 'welcome', isHost, id: client.id, link: isHost ? inviteLink(room) : null, gifs: GIPHY_API_KEY !== '', suggest: tmdb !== null, discord: DISCORD_WEBHOOK_URL !== '', chat: chats.get(room.id) ?? [] }))
+    send(client, JSON.stringify({ type: 'welcome', isHost, id: client.id, link: isHost ? inviteLink(room) : null, gifs: GIPHY_API_KEY !== '', suggest: tmdb !== null, discord: DISCORD_WEBHOOK_URL !== '', requests: isHost && requests, chat: chats.get(room.id) ?? [] }))
     sendLog(room, client)
     broadcast(room)
 
