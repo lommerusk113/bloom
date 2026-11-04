@@ -6,6 +6,9 @@ import { setupCast } from './cast.js'
 const $ = (id) => document.getElementById(id)
 const video = $('video')
 const roomId = location.pathname.split('/')[2]
+/** Inside the room settings page's small player: fullscreen and "back" act on that page's frame. */
+const frame = window.frameElement
+const screenDoc = frame ? parent.document : document
 const prefs = { audio: null, subs: null } // per viewer, reset per item
 
 let socket = null
@@ -73,6 +76,12 @@ async function join() {
     if (socket) {
         return // auto-join and a click can race
     }
+    const here = location.hash === '#here' // "Watch here" was clicked
+    history.replaceState(null, '', location.pathname + location.search)
+    if (frame && !here && await playingElsewhere()) {
+        standBy() // the small player on the settings page never takes over from a real player tab
+        return
+    }
     if (!$('password').hidden) {
         const res = await fetch(`/api/rooms/${roomId}/join`, {
             method: 'POST',
@@ -94,9 +103,54 @@ async function join() {
     $('player').hidden = false
     video.play().catch(() => {}) // user gesture: unlocks later programmatic play() on iOS
     socket = connectRoom(roomId, name, onMessage)
+    tabs?.postMessage('claim')
     speedTest = measureSpeed()
     cast = setupCast({ roomId, deviceId, getState: () => state })
     setInterval(syncNow, 1000)
+}
+
+// --- one player per browser: two would play over each other and pull two streams ---
+
+const tabs = 'BroadcastChannel' in window ? new BroadcastChannel(`bloom-room-${roomId}`) : null
+let standingBy = false
+if (tabs) {
+    tabs.onmessage = ({ data }) => {
+        if (data === 'who' && socket && !standingBy) {
+            tabs.postMessage('here')
+        } else if (data === 'claim' && socket && !standingBy) {
+            socket.close() // the newest player wins
+            state = null
+            unloadStream()
+            standBy()
+        }
+    }
+}
+
+/** Asks this browser's other tabs whether one already plays this room. */
+function playingElsewhere() {
+    if (!tabs) {
+        return Promise.resolve(false)
+    }
+    return new Promise((resolve) => {
+        const listen = ({ data }) => data === 'here' && resolve(true)
+        tabs.addEventListener('message', listen)
+        tabs.postMessage('who')
+        setTimeout(() => {
+            tabs.removeEventListener('message', listen)
+            resolve(false)
+        }, 300)
+    })
+}
+
+function standBy() {
+    standingBy = true
+    $('join').hidden = true
+    $('player').hidden = false
+    $('elsewhere').hidden = false
+}
+$('watchHere').onclick = () => {
+    location.hash = 'here'
+    location.reload()
 }
 
 function onMessage(msg) {
@@ -106,7 +160,7 @@ function onMessage(msg) {
         if (speedMbps !== null) {
             socket.send({ type: 'speed', value: speedMbps })
         }
-        $('manage').hidden = !isHost
+        $('manage').hidden = !isHost || (frame && !screenDoc.fullscreenElement)
         $('manage').href = `/?room=${roomId}`
         $('status').textContent = ''
         return
@@ -584,13 +638,25 @@ $('tap').onclick = () => {
     video.play().catch(() => {})
 }
 $('fullscreen').onclick = () => {
-    if (document.fullscreenElement) {
-        document.exitFullscreen()
+    if (screenDoc.fullscreenElement) {
+        screenDoc.exitFullscreen()
+    } else if (frame?.requestFullscreen) {
+        frame.requestFullscreen()
     } else if ($('player').requestFullscreen) {
         $('player').requestFullscreen()
     } else {
         video.webkitEnterFullscreen?.()
     }
+}
+if (frame) {
+    // the settings page is right behind the fullscreen player: "Room settings" just leaves fullscreen
+    $('manage').onclick = (event) => {
+        event.preventDefault()
+        screenDoc.exitFullscreen()
+    }
+    screenDoc.addEventListener('fullscreenchange', () => {
+        $('manage').hidden = !isHost || !screenDoc.fullscreenElement
+    })
 }
 document.addEventListener('keydown', (event) => {
     if (event.code === 'Space' && !['INPUT', 'SELECT', 'BUTTON'].includes(event.target.tagName) && !$('toggle').disabled) {

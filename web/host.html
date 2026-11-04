@@ -80,13 +80,16 @@
             </div>
 
             <aside class="sidebar">
+                <div class="mini-player">
+                    <iframe id="miniPlayer" title="Player" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+                </div>
                 <div class="panel invite">
                     <h2>Invite</h2>
                     <div class="row">
                         <input id="link" readonly aria-label="Guest link">
                         <button id="copy" class="primary">Copy</button>
                     </div>
-                    <a id="open" class="button open-player" target="_blank" rel="noopener">▶ Open player</a>
+                    <a id="open" class="button open-player" target="_blank" rel="noopener">⛶ Watch fullscreen</a>
                     <form id="passwordForm" class="row">
                         <input id="roomPassword" placeholder="Password (optional)" maxlength="100" autocomplete="off" aria-label="Room password">
                         <button id="savePassword">Set</button>

@@ -8,6 +8,7 @@ export function connectRoom(roomId, name, onMessage, observer = false) {
     const samples = []
     let ws = null
     let delay = 0 // reconnect backoff, 0 while connected
+    let closed = false
 
     const socket = {
         offset: 0,
@@ -16,6 +17,11 @@ export function connectRoom(roomId, name, onMessage, observer = false) {
             if (ws?.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify(msg))
             }
+        },
+        /** Leaves the room for good: no reconnecting. */
+        close() {
+            closed = true
+            ws?.close()
         },
     }
     const ping = () => socket.send({ type: 'ping', t0: Date.now() })
@@ -42,6 +48,9 @@ export function connectRoom(roomId, name, onMessage, observer = false) {
             socket.offset = median(samples)
         }
         ws.onclose = (event) => {
+            if (closed) {
+                return
+            }
             if (event.code === 4404) {
                 onMessage({ type: 'gone' })
                 return

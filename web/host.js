@@ -104,6 +104,11 @@ function lobby(rooms) {
 }
 
 function account(user) {
+    try {
+        localStorage.setItem('wp_name', localStorage.getItem('wp_name') || user.name) // the small player joins under it
+    } catch {
+        // private mode: the small player asks for a name
+    }
     $('account').textContent = `${user.name} ▾`
     $('adminLink').hidden = !user.admin
     $('logout').onclick = async () => {
@@ -133,7 +138,14 @@ function manage(room) {
     }
     const url = `${location.origin}/r/${roomId}`
     $('link').value = url
-    $('open').href = url
+    $('open').href = url // fallback where an iframe can't go fullscreen (iPhone)
+    $('miniPlayer').src = url
+    $('open').onclick = (event) => {
+        if ($('miniPlayer').requestFullscreen) {
+            event.preventDefault()
+            $('miniPlayer').requestFullscreen()
+        }
+    }
     $('copy').onclick = async () => {
         if (navigator.clipboard) {
             await navigator.clipboard.writeText(url)
