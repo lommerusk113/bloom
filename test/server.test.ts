@@ -193,6 +193,13 @@ test('the host sees who did what, everyone sees reactions, and the host can remo
     guest.send({ type: 'react', emoji: '<script>' })
     assert.deepEqual(await host.next(m => m.type === 'reaction'), { type: 'reaction', emoji: '🔥', name: 'Alice' })
 
+    guest.send({ type: 'chat', text: '  hi all  ', gif: { url: 'https://evil.example/track.gif' } })
+    const chat = await host.next(m => m.type === 'chat')
+    assert.deepEqual([chat.message.name, chat.message.text, chat.message.gif], ['Alice', 'hi all', null])
+    const late = openSocket(id)
+    assert.deepEqual((await late.next(m => m.type === 'welcome')).chat.map((m: { text: string }) => m.text), ['hi all'])
+    late.close()
+
     const alice = (await host.next(m => m.type === 'state' && m.viewers.length === 2)).viewers.find((v: { name: string }) => v.name === 'Alice')
     const closed = new Promise<number>(resolve => guest.onClose(resolve))
     host.send({ type: 'kick', id: alice.id })

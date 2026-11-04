@@ -10,6 +10,7 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:?your external URL, e.g. https://watch.example.com}
       JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+      GIPHY_API_KEY: ${GIPHY_API_KEY:-}
     # localhost only: reach it through your reverse proxy
     ports:
       - "127.0.0.1:8080:8080"

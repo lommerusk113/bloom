@@ -13,6 +13,7 @@ services:
       JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:?Jellyfin Dashboard > API Keys}
       JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+      GIPHY_API_KEY: ${GIPHY_API_KEY:-}
     # for a proxy outside Docker (Pangolin's Newt, nginx): http://<server>:HOST_PORT
     ports:
       - "${HOST_PORT:-8765}:8080"

@@ -14,13 +14,18 @@ import { apply, createRoom, currentPosition, describe, parseCommand, playNext, v
  * windowStart/count/strikes: websocket rate limit state, see overLimit. bufferingSince: 0 unless the client's player is loading.
  * speed: the viewer's measured download speed in Mbps, 0 until reported.
  */
-type Client = { id: string; ws: WebSocket; name: string; lastReaction: number; isHost: boolean; observer: boolean; windowStart: number; count: number; strikes: number; bufferingSince: number; speed: number }
+type Client = { id: string; ws: WebSocket; name: string; lastReaction: number; lastChat: number; isHost: boolean; observer: boolean; windowStart: number; count: number; strikes: number; bufferingSince: number; speed: number }
 
 const alive = new WeakSet<WebSocket>()
 
 const MAX_MESSAGES_PER_SECOND = 20
 const MAX_STRIKES = 5
-const REACTIONS = new Set(['😂', '😮', '😍', '👏', '😱', '🔥'])
+const REACTIONS = new Set(['😂', '😢', '😮', '😍', '👏', '😱', '🔥'])
+const CHAT_GAP_MS = 500
+const CHAT_HISTORY = 100
+const MAX_CHAT_LENGTH = 500
+/** GIFs are only ever shown from GIPHY's own media servers, so a message can't make viewers load any other URL. */
+const GIPHY_MEDIA = /^https:\/\/media\d*\.giphy\.com\/media\/[\w./?=&-]+$/
 const REACTION_GAP_MS = 300
 const VOTE_MS = 60_000
 const ITEM_ID = /^[0-9a-f-]{32,36}$/i
@@ -52,6 +57,7 @@ const SPEED_TEST = randomBytes(4_000_000)
 const SPEED_TEST_REPEATS = 10
 const LANGUAGE = /^[a-z]{3}$/
 const tmdb = process.env.TMDB_API_KEY ? createTmdb(process.env.TMDB_API_KEY) : null
+const GIPHY_API_KEY = process.env.GIPHY_API_KEY || ''
 /** Room passwords, kept out of Room so they are never broadcast. */
 const locks = new Map<string, { password: string; auth: ReturnType<typeof createAuth> }>()
 
@@ -61,6 +67,9 @@ const emptySince = new Map<string, number>()
 /** Per room: who did what, newest last; only its host sees it. */
 const logs = new Map<string, Array<{ at: number; name: string; text: string }>>()
 const LOG_SIZE = 100
+type ChatMessage = { at: number; name: string; text: string; gif: { url: string; width: number; height: number } | null }
+/** Per room: the latest chat messages, for viewers who join later. */
+const chats = new Map<string, ChatMessage[]>()
 const pendingBroadcasts = new Set<Room>()
 let flushTimer: NodeJS.Timeout | undefined
 let jellyfinError: string | null = 'Not checked yet'
@@ -233,7 +242,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         return proxyRequest(req, res, room, proxied[2] + url.search, jf)
     }
 
-    const roomTool = /^\/r\/([\w-]+)\/(speedtest|subtitles|segments|poster)$/.exec(path)
+    const roomTool = /^\/r\/([\w-]+)\/(speedtest|subtitles|segments|poster|gifs)$/.exec(path)
     if (roomTool) {
         const room = rooms.get(roomTool[1])
         if (!room) {
@@ -264,6 +273,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             res.writeHead(200, { 'content-type': image.headers.get('content-type') ?? 'image/jpeg', 'cache-control': 'private, max-age=300' })
             res.end(Buffer.from(await image.arrayBuffer()))
             return
+        }
+        if (roomTool[2] === 'gifs') {
+            return sendJson(res, 200, await searchGifs(url.searchParams.get('q') ?? ''))
         }
         if (roomTool[2] === 'segments') {
             const item = room.queue[room.index]
@@ -503,6 +515,7 @@ async function endRoom(room: Room): Promise<void> {
     emptySince.delete(room.id)
     locks.delete(room.id)
     logs.delete(room.id)
+    chats.delete(room.id)
     for (const client of clients.get(room.id) ?? []) {
         client.ws.close(4404, 'Room ended')
     }
@@ -548,7 +561,7 @@ server.on('upgrade', (req, socket, head) => {
 
 function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
 
-    const client: Client = { id: randomBytes(8).toString('base64url'), lastReaction: 0, ws, name: 'Guest', isHost, observer: false, windowStart: 0, count: 0, strikes: 0, bufferingSince: 0, speed: 0 }
+    const client: Client = { id: randomBytes(8).toString('base64url'), lastReaction: 0, lastChat: 0, ws, name: 'Guest', isHost, observer: false, windowStart: 0, count: 0, strikes: 0, bufferingSince: 0, speed: 0 }
     const set = clients.get(room.id) ?? new Set<Client>()
     clients.set(room.id, set)
     set.add(client)
@@ -556,7 +569,7 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
     ws.on('pong', () => alive.add(ws))
     // oversized or malformed frames emit 'error'; unhandled it would crash the process
     ws.on('error', () => ws.terminate())
-    send(client, JSON.stringify({ type: 'welcome', isHost, id: client.id }))
+    send(client, JSON.stringify({ type: 'welcome', isHost, id: client.id, gifs: GIPHY_API_KEY !== '', chat: chats.get(room.id) ?? [] }))
     sendLog(room, client)
     broadcast(room)
 
@@ -695,6 +708,21 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
             }
             return
         }
+        case 'chat': {
+            const message = chatMessage(client, msg, now)
+            if (!message) {
+                return
+            }
+            const chat = chats.get(room.id) ?? []
+            chats.set(room.id, chat)
+            chat.push(message)
+            chat.splice(0, chat.length - CHAT_HISTORY)
+            const data = JSON.stringify({ type: 'chat', message })
+            for (const other of clients.get(room.id) ?? []) {
+                send(other, data)
+            }
+            return
+        }
         case 'voteStart': {
             if (!client.isHost) {
                 return
@@ -748,6 +776,45 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
     broadcast(room)
 }
 
+/** A validated chat message, or null for an empty, flooding or malformed one. */
+function chatMessage(client: Client, msg: Record<string, unknown>, now: number): ChatMessage | null {
+
+    if (client.observer || now - client.lastChat < CHAT_GAP_MS) {
+        return null
+    }
+    const text = String(msg.text ?? '').trim().slice(0, MAX_CHAT_LENGTH)
+    const raw = msg.gif as { url?: unknown; width?: unknown; height?: unknown } | null | undefined
+    const gif = raw && typeof raw.url === 'string' && GIPHY_MEDIA.test(raw.url)
+        ? { url: raw.url, width: Math.min(Number(raw.width) || 200, 1000), height: Math.min(Number(raw.height) || 200, 1000) }
+        : null
+    if (!text && !gif) {
+        return null
+    }
+    client.lastChat = now
+
+    return { at: now, name: client.name, text, gif }
+}
+
+/** GIPHY search, or what's trending for an empty term; [] without a GIPHY_API_KEY. */
+async function searchGifs(term: string): Promise<Array<{ url: string; preview: string; width: number; height: number; title: string }>> {
+
+    if (!GIPHY_API_KEY) {
+        return []
+    }
+    const query = new URLSearchParams({ api_key: GIPHY_API_KEY, limit: '24', rating: 'pg-13' })
+    if (term.trim()) {
+        query.set('q', term.trim().slice(0, 50))
+    }
+    const res = await fetch(`https://api.giphy.com/v1/gifs/${term.trim() ? 'search' : 'trending'}?${query}`, { signal: AbortSignal.timeout(8000) })
+    if (!res.ok) {
+        throw new Error(`GIPHY ${res.status}`)
+    }
+    type Image = { url: string; width: string; height: string }
+    const { data } = await res.json() as { data: Array<{ title: string; images: { fixed_height: Image; fixed_height_small: Image } }> }
+
+    return data.map(g => ({ url: g.images.fixed_height.url, preview: g.images.fixed_height_small.url, width: Number(g.images.fixed_height.width), height: Number(g.images.fixed_height.height), title: g.title }))
+}
+
 /** Closes the room's vote: the winner plays next, or right away when nothing is on. */
 async function finishVote(room: Room): Promise<void> {
 
@@ -777,6 +844,7 @@ setInterval(() => {
         clients.delete(id)
         locks.delete(id)
         logs.delete(id)
+        chats.delete(id)
         progress.delete(id) // empty for 5 minutes: the host's progress was saved while they were there
     }
 }, 1000)

@@ -69,6 +69,7 @@
                             <button id="mute" class="icon" title="Mute" aria-label="Mute"><svg viewBox="0 0 24 24" aria-hidden="true"><path d=""/></svg></button>
                             <input id="volume" type="range" min="0" max="1" step="0.05" aria-label="Volume">
                         </div>
+                        <button id="chatButton" class="icon chat-button" title="Chat" aria-label="Chat" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm0 14H5.17L4 17.17V4h16v12z"/></svg><span id="unread" class="unread" hidden></span></button>
                         <div class="react-wrap">
                             <button id="reactButton" class="icon" title="React" aria-label="React" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm3.5-9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm-7 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg></button>
                             <div id="reactBar" class="react-bar" hidden></div>
@@ -109,6 +110,23 @@
             </div>
         </div>
     </div>
+    <aside id="chat" class="chat" hidden aria-label="Chat">
+        <header class="chat-head">
+            <strong>Chat</strong>
+            <button id="chatClose" class="icon" title="Close chat" aria-label="Close chat">✕</button>
+        </header>
+        <ol id="chatLog" class="chat-log" aria-live="polite"></ol>
+        <div id="gifPicker" class="gif-picker" hidden>
+            <input id="gifSearch" type="search" placeholder="Search GIPHY" aria-label="Search GIFs">
+            <div id="gifResults" class="gif-results"></div>
+            <div class="muted small">Powered by GIPHY</div>
+        </div>
+        <form id="chatForm" class="chat-form">
+            <button id="gifButton" type="button" class="gif-button" title="Send a GIF" hidden>GIF</button>
+            <input id="chatInput" placeholder="Say something…" maxlength="500" autocomplete="off" aria-label="Message">
+            <button class="primary" aria-label="Send">➤</button>
+        </form>
+    </aside>
 </main>
 <script type="module" src="/web/room.js"></script>
 </body>

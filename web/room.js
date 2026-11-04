@@ -158,6 +158,8 @@ function onMessage(msg) {
     if (msg.type === 'welcome') {
         isHost = msg.isHost
         myId = msg.id
+        $('gifButton').hidden = !msg.gifs
+        showChatHistory(msg.chat)
         reportedBuffering = false // a new connection starts out not buffering on the server
         if (speedMbps !== null) {
             socket.send({ type: 'speed', value: speedMbps })
@@ -165,6 +167,10 @@ function onMessage(msg) {
         $('manage').hidden = !isHost || (frame && !screenDoc.fullscreenElement)
         $('manage').href = `/?room=${roomId}`
         $('status').textContent = ''
+        return
+    }
+    if (msg.type === 'chat') {
+        addChatMessage(msg.message)
         return
     }
     if (msg.type === 'reaction') {
@@ -751,6 +757,132 @@ function noteStall() {
     load(current.itemId, true)
 }
 
+// --- chat: opens beside the video, Discord style, and stays in fullscreen ---
+
+let unread = 0
+
+function setChatOpen(open) {
+    $('chat').hidden = !open
+    $('player').classList.toggle('chat-open', open)
+    $('chatButton').setAttribute('aria-expanded', String(open))
+    store('wp_chat', open ? '1' : '0')
+    if (open) {
+        unread = 0
+        $('unread').hidden = true
+        $('chatLog').scrollTop = $('chatLog').scrollHeight
+    } else {
+        $('gifPicker').hidden = true
+    }
+}
+$('chatButton').onclick = (event) => {
+    event.stopPropagation()
+    setChatOpen($('chat').hidden)
+}
+$('chatClose').onclick = () => setChatOpen(false)
+setChatOpen(!frame && recall('wp_chat') === '1') // the small player on the settings page is too small for it
+
+function showChatHistory(messages) {
+    $('chatLog').replaceChildren()
+    messages.forEach(m => addChatMessage(m, false))
+    if (!messages.length) {
+        const hint = document.createElement('li')
+        hint.className = 'empty'
+        hint.textContent = 'No messages yet. Say hi!'
+        $('chatLog').append(hint)
+    }
+}
+
+function addChatMessage(message, live = true) {
+    $('chatLog').querySelector('.empty')?.remove()
+    const log = $('chatLog')
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40
+    const row = document.createElement('li')
+    const who = document.createElement('span')
+    who.className = 'who'
+    who.textContent = message.name
+    row.title = new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    row.append(who, message.text)
+    if (message.gif) {
+        const img = document.createElement('img')
+        img.src = message.gif.url
+        img.alt = 'GIF'
+        img.width = message.gif.width
+        img.height = message.gif.height
+        img.style.height = 'auto'
+        img.loading = 'lazy'
+        img.referrerPolicy = 'no-referrer'
+        row.append(img)
+    }
+    log.append(row)
+    while (log.children.length > 200) {
+        log.firstElementChild.remove()
+    }
+    if (atBottom || message.name === myName) {
+        log.scrollTop = log.scrollHeight
+    }
+    if (live && $('chat').hidden) {
+        unread++
+        $('unread').textContent = unread > 9 ? '9+' : String(unread)
+        $('unread').hidden = false
+    }
+}
+
+$('chatForm').onsubmit = (event) => {
+    event.preventDefault()
+    const text = $('chatInput').value.trim()
+    if (text && socket) {
+        socket.send({ type: 'chat', text })
+        $('chatInput').value = ''
+    }
+}
+$('chat').onclick = (event) => event.stopPropagation() // clicks in the chat don't toggle playback or close menus
+$('chat').onkeydown = (event) => event.stopPropagation() // typing a space doesn't pause
+
+let gifSearchToken = 0
+async function searchGifs(term) {
+    const token = ++gifSearchToken
+    const res = await fetch(`/r/${roomId}/gifs?q=${encodeURIComponent(term)}`).catch(() => null)
+    const gifs = res?.ok ? await res.json() : []
+    if (token !== gifSearchToken) {
+        return
+    }
+    $('gifResults').replaceChildren(...gifs.map((gif) => {
+        const pick = document.createElement('button')
+        pick.type = 'button'
+        pick.title = gif.title
+        const img = document.createElement('img')
+        img.src = gif.preview
+        img.alt = gif.title
+        img.loading = 'lazy'
+        img.referrerPolicy = 'no-referrer'
+        pick.append(img)
+        pick.onclick = () => {
+            socket.send({ type: 'chat', text: $('chatInput').value.trim(), gif: { url: gif.url, width: gif.width, height: gif.height } })
+            $('chatInput').value = ''
+            $('gifPicker').hidden = true
+        }
+        return pick
+    }))
+}
+$('gifButton').onclick = () => {
+    $('gifPicker').hidden = !$('gifPicker').hidden
+    if (!$('gifPicker').hidden) {
+        $('gifSearch').value = ''
+        $('gifSearch').focus()
+        searchGifs('')
+    }
+}
+let gifTimer = 0
+$('gifSearch').oninput = () => {
+    clearTimeout(gifTimer)
+    gifTimer = setTimeout(() => searchGifs($('gifSearch').value), 350)
+}
+$('gifSearch').onkeydown = (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault() // not a chat send
+    }
+}
+
 // --- phone lock screen and headset buttons ---
 
 const mediaSession = 'mediaSession' in navigator ? navigator.mediaSession : null
@@ -848,7 +980,7 @@ function showVoteTime() {
     }
 }
 
-const REACTIONS = ['😂', '😮', '😍', '👏', '😱', '🔥']
+const REACTIONS = ['😂', '😢', '😮', '😍', '👏', '😱', '🔥']
 $('reactBar').replaceChildren(...REACTIONS.map((emoji) => {
     const b = document.createElement('button')
     b.textContent = emoji
