@@ -56,9 +56,8 @@
         <form id="startForm" class="panel start-room" hidden>
             <h2>Start a room</h2>
             <p class="muted">You get an invite link and password to share. The room closes when you end it, or 5 minutes after everyone leaves.</p>
-            <label>Starts (optional)<input id="startAt" type="datetime-local"></label>
-            <p class="muted small">Scheduled rooms stay open until then and show on Movie nights.</p>
-            <button class="primary">Start room</button>
+            <div id="startPicker"></div>
+            <button id="startButton" class="primary">Start room now</button>
         </form>
 
         <div id="layout" class="layout">
@@ -84,56 +83,75 @@
                 <div class="mini-player">
                     <iframe id="miniPlayer" title="Player" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
                 </div>
-                <div class="panel invite">
-                    <h2>Invite</h2>
+                <div class="now">
+                    <div class="grow">
+                        <div id="nowHeading" class="muted small">Nothing playing</div>
+                        <div id="nowTitle" class="now-title">Nothing yet</div>
+                        <div id="nowTime" class="muted small">Click a poster to add it</div>
+                    </div>
+                    <div class="row">
+                        <button id="toggle" class="primary" disabled>▶ Play</button>
+                        <button id="next" disabled title="Next">⏭</button>
+                        <a id="open" class="button" target="_blank" rel="noopener" title="Watch fullscreen">⛶</a>
+                    </div>
+                </div>
+
+                <nav class="tabs side-tabs" role="tablist">
+                    <button data-tab="queue" role="tab">Queue <span id="queueBadge" class="count" hidden></span></button>
+                    <button data-tab="people" role="tab">Invite</button>
+                    <button data-tab="room" role="tab">Settings</button>
+                    <button data-tab="log" role="tab">Activity</button>
+                </nav>
+
+                <div class="tab-panel" data-panel="queue">
+                    <div id="votePanel" class="panel" hidden>
+                        <h3>Vote</h3>
+                        <ol id="voteList" class="list"></ol>
+                        <p id="voteNote" class="muted small"></p>
+                        <div id="voteActions" class="row"></div>
+                    </div>
+                    <div id="suggestPanel" class="panel" hidden>
+                        <h3>Suggestions from guests</h3>
+                        <ol id="suggestions" class="list"></ol>
+                    </div>
+                    <ol id="queue" class="list"></ol>
+                    <p id="emptyQueue" class="empty">Empty — pick something on the left.</p>
+                </div>
+
+                <div class="tab-panel" data-panel="people" hidden>
+                    <h3>Invite link</h3>
                     <div class="row">
                         <input id="link" readonly aria-label="Guest link">
                         <button id="copy" class="primary">Copy</button>
                     </div>
-                    <a id="open" class="button open-player" target="_blank" rel="noopener">⛶ Watch fullscreen</a>
+                    <h3>Password</h3>
                     <form id="passwordForm" class="row">
                         <input id="roomPassword" placeholder="Room password" minlength="4" maxlength="100" required autocomplete="off" aria-label="Room password">
                         <button id="savePassword">Set</button>
                     </form>
                     <p id="passwordNote" class="muted small"></p>
+                    <h3>Watching</h3>
+                    <p id="viewers" class="chips"></p>
+                </div>
+
+                <div class="tab-panel" data-panel="room" hidden>
+                    <h3>Playback</h3>
                     <label class="check"><input id="guestControl" type="checkbox"> Guests may pause, seek and skip</label>
                     <label class="check"><input id="autoContinue" type="checkbox"> Auto-continue shows with the next episode</label>
                     <label class="check"><input id="autoSkip" type="checkbox"> Auto-skip intros</label>
                     <label id="announceRow" class="check" hidden><input id="announce" type="checkbox"> Announce on Discord</label>
-                    <form id="scheduleForm" class="row">
-                        <input id="startsAt" type="datetime-local" aria-label="Scheduled start">
-                        <button id="saveSchedule">Schedule</button>
-                    </form>
-                    <p id="scheduleNote" class="muted small"></p>
-                </div>
-                <div id="suggestPanel" class="panel" hidden>
-                    <h2>Suggestions</h2>
-                    <ol id="suggestions" class="list"></ol>
-                </div>
-                <div id="votePanel" class="panel" hidden>
-                    <h2>Vote</h2>
-                    <ol id="voteList" class="list"></ol>
-                    <p id="voteNote" class="muted small"></p>
-                    <div id="voteActions" class="row"></div>
-                </div>
-                <div class="panel">
-                    <h2 id="nowHeading">Nothing playing</h2>
-                    <div class="now">
-                        <div>
-                            <div id="nowTitle" class="now-title">Nothing yet</div>
-                            <div id="nowTime" class="muted">Click a poster to add it</div>
-                        </div>
-                        <div class="row">
-                            <button id="toggle" class="primary" disabled>▶ Play</button>
-                            <button id="next" disabled>Next ⏭</button>
-                        </div>
+                    <h3>Start time</h3>
+                    <div id="scheduled" class="scheduled" hidden>
+                        <p id="scheduleNote"></p>
+                        <button id="cancelSchedule">Cancel schedule</button>
                     </div>
-                    <h3>Queue</h3>
-                    <ol id="queue" class="list"></ol>
-                    <p id="emptyQueue" class="empty">Empty — pick something on the left.</p>
-                    <h3>Watching</h3>
-                    <p id="viewers" class="chips"></p>
-                    <h3>Activity</h3>
+                    <form id="scheduleForm">
+                        <div id="schedulePicker"></div>
+                        <button class="primary">Schedule</button>
+                    </form>
+                </div>
+
+                <div class="tab-panel" data-panel="log" hidden>
                     <ol id="log" class="list log"></ol>
                     <p id="emptyLog" class="empty">Who plays, pauses, seeks and skips shows up here.</p>
                 </div>

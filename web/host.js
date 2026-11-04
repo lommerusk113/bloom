@@ -1,7 +1,7 @@
 import { connectRoom } from './ws.js'
 import { targetPosition } from './sync.js'
+import { $, longDate, recall, store, timePicker, until } from './util.js'
 
-const $ = (id) => document.getElementById(id)
 const roomId = new URLSearchParams(location.search).get('room')
 let socket = null
 let state = null
@@ -97,11 +97,17 @@ function offerStart() {
     $('searchForm').hidden = true
     $('endRoom').hidden = true
     $('startForm').hidden = false
+    const picker = timePicker($('startPicker'), {
+        allowNow: true,
+        onChange: (at) => {
+            $('startButton').textContent = at === null ? 'Start room now' : 'Schedule room'
+            $('startButton').disabled = Number.isNaN(at)
+        },
+    })
     $('startForm').onsubmit = async (event) => {
         event.preventDefault()
-        const value = $('startAt').value
         try {
-            const { id } = await postJson('/api/rooms', { startsAt: value ? new Date(value).getTime() : null }) // datetime-local is local time
+            const { id } = await postJson('/api/rooms', { startsAt: picker.value() })
             location.replace(`/?room=${id}`)
         } catch (err) {
             showStatus(err.message)
@@ -233,19 +239,13 @@ function manage(room) {
     $('autoContinue').onchange = () => command({ type: 'setAutoContinue', value: $('autoContinue').checked })
     $('autoSkip').onchange = () => command({ type: 'setAutoSkip', value: $('autoSkip').checked })
     $('announce').onchange = () => command({ type: 'setAnnounce', value: $('announce').checked })
+    const picker = timePicker($('schedulePicker'), { onChange: (at) => { $('scheduleForm').querySelector('button').disabled = Number.isNaN(at) } })
     $('scheduleForm').onsubmit = (event) => {
         event.preventDefault()
-        if (state?.room.startsAt) {
-            command({ type: 'schedule', at: null })
-            return
-        }
-        const at = new Date($('startsAt').value).getTime() // datetime-local is read as local time
-        if (!Number.isFinite(at) || at <= Date.now()) {
-            showStatus('Pick a time in the future')
-            return
-        }
-        command({ type: 'schedule', at })
+        command({ type: 'schedule', at: picker.value() })
     }
+    $('cancelSchedule').onclick = () => command({ type: 'schedule', at: null })
+    setupTabs()
     $('searchForm').onsubmit = (event) => {
         event.preventDefault()
         const term = $('q').value
@@ -435,6 +435,8 @@ function match(s) {
 
 function renderSuggestions(suggestions) {
     $('suggestPanel').hidden = suggestions.length === 0
+    $('queueBadge').hidden = suggestions.length === 0
+    $('queueBadge').textContent = String(suggestions.length)
     const dismiss = (s) => socket.send({ type: 'dismissSuggestion', tmdbId: s.tmdbId })
     $('suggestions').replaceChildren(...suggestions.toReversed().map((s) => {
         const row = li(`${s.name} · ${s.by}`, button('✕', () => dismiss(s), { title: 'Dismiss' }))
@@ -687,24 +689,32 @@ function card(trail, i) {
     return tile
 }
 
-/** A time as datetime-local's value, in this browser's time zone. */
-function toLocalInput(ms) {
-    const d = new Date(ms)
-    return new Date(ms - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+/** Sidebar tabs; the last one picked comes back on reload. */
+function setupTabs() {
+    const tabs = [...document.querySelectorAll('.side-tabs [data-tab]')]
+    const show = (name) => {
+        for (const tab of tabs) {
+            tab.classList.toggle('active', tab.dataset.tab === name)
+            tab.setAttribute('aria-selected', String(tab.dataset.tab === name))
+        }
+        for (const panel of document.querySelectorAll('.tab-panel')) {
+            panel.hidden = panel.dataset.panel !== name
+        }
+        store('bloom_tab', name)
+    }
+    for (const tab of tabs) {
+        tab.onclick = () => show(tab.dataset.tab)
+    }
+    show(tabs.some(t => t.dataset.tab === recall('bloom_tab')) ? recall('bloom_tab') : 'queue')
 }
 
 function renderSchedule() {
     const at = state?.room.startsAt
-    $('scheduleNote').textContent = at
-        ? `Starts ${new Date(at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · in ${until(at - socket.serverNow())}. Guests who open the link see a countdown, and the room stays open until then.`
-        : 'Optional: pick a start time and the room starts playing by itself.'
-}
-
-function until(ms) {
-    const minutes = Math.max(0, Math.ceil(ms / 60_000))
-    const days = Math.floor(minutes / 1440)
-    const hours = Math.floor(minutes / 60) % 24
-    return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`
+    $('scheduled').hidden = !at
+    $('scheduleForm').hidden = Boolean(at)
+    if (at) {
+        $('scheduleNote').textContent = `${longDate(at)} · in ${until(at - socket.serverNow())}. Guests who open the link see a countdown; it starts by itself when someone's there.`
+    }
 }
 
 function renderTime() {
@@ -731,11 +741,6 @@ function render() {
     $('autoSkip').checked = room.autoSkip
     $('announce').checked = room.announce
     renderSuggestions(room.suggestions)
-    $('startsAt').disabled = Boolean(room.startsAt)
-    $('saveSchedule').textContent = room.startsAt ? 'Cancel' : 'Schedule'
-    if (room.startsAt) {
-        $('startsAt').value = toLocalInput(room.startsAt)
-    }
     $('nowHeading').textContent = !item ? 'Nothing playing' : room.waiting ? 'Loading…' : room.playing ? 'Now playing' : 'Paused'
     $('nowTitle').textContent = item?.name ?? 'Queue is empty'
     $('toggle').disabled = !item
@@ -756,7 +761,7 @@ function render() {
         return row
     }))
 
-    $('viewers').replaceChildren(...(viewers.length ? viewers.map(viewerChip) : [el('span', 'muted', 'Nobody yet — share the link above')]))
+    $('viewers').replaceChildren(...(viewers.length ? viewers.map(viewerChip) : [el('span', 'muted', 'Nobody yet — share the link')]))
 }
 
 /** A viewer's name; guests get a ✕ that removes them from the room. */

@@ -778,7 +778,7 @@ function render() {
     }
     $('toggle').querySelector('path').setAttribute('d', room.playing ? PAUSE_ICON : PLAY_ICON)
     $('seek').max = String(Math.floor(item?.runtime ?? 0))
-    $('title').textContent = item?.name ?? 'Waiting for the host to pick something…'
+    $('title').textContent = item?.name ?? (room.startsAt ? '' : 'Waiting for the host to pick something…') // a scheduled room shows its countdown
     document.title = `${room.name} · Bloom`
     $('lock').hidden = mayControl
     const chip = (text, title = '') => {
