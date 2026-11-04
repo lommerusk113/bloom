@@ -54,6 +54,8 @@ const CONTENT_TYPES: Record<string, string> = {
 const PORT = Number(process.env.PORT ?? 8080)
 // Coolify's SERVICE_FQDN_* may be a bare domain; it is served over https
 const PUBLIC_URL = withScheme(process.env.PUBLIC_URL || `http://localhost:${PORT}`)
+// without PUBLIC_URL, links sent outside a page (Discord) use the address hosts reach Bloom on
+let publicOrigin = process.env.PUBLIC_URL ? PUBLIC_URL : null
 const PUBLIC_HOST = new URL(PUBLIC_URL).host
 const jf = createJellyfin(required('JELLYFIN_URL').replace(/\/$/, ''), required('JELLYFIN_API_KEY'), process.env.JELLYFIN_USER_ID || undefined)
 const SECURE = PUBLIC_URL.startsWith('https:')
@@ -245,7 +247,7 @@ function invite(room: Room, now = Date.now()): { key: string; at: number; previo
     if (!current || now - current.at > INVITE_TTL_MS) {
         current = { key: randomBytes(12).toString('base64url'), at: now, previous: current?.key ?? null }
         invites.set(room.id, current)
-        const message = JSON.stringify({ type: 'invite', link: `${PUBLIC_URL}/r/${room.id}?i=${current.key}` })
+        const message = JSON.stringify({ type: 'invite', link: `/r/${room.id}?i=${current.key}` })
         for (const client of clients.get(room.id) ?? []) {
             if (client.isHost) {
                 send(client, message) // the host's page shows the new link
@@ -255,7 +257,8 @@ function invite(room: Room, now = Date.now()): { key: string; at: number; previo
     return current
 }
 
-const inviteLink = (room: Room) => `${PUBLIC_URL}/r/${room.id}?i=${invite(room).key}`
+/** The invite link's path; pages put their own origin in front, so it is right behind any proxy. */
+const inviteLink = (room: Room) => `/r/${room.id}?i=${invite(room).key}`
 
 function validInvite(room: Room, key: string, now = Date.now()): boolean {
     const current = invite(room, now)
@@ -483,6 +486,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!user) {
         return sendJson(res, 403, { error: 'Login required' })
     }
+    if (!process.env.PUBLIC_URL) {
+        const host = req.headers['x-forwarded-host'] ?? req.headers.host
+        publicOrigin = host ? `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${host}` : publicOrigin
+    }
 
     if (path.startsWith('/api/admin/')) {
         if (!user.admin) {
@@ -500,8 +507,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         if (existing) {
             return sendJson(res, 200, { id: existing.id })
         }
-        const id = randomBytes(16).toString('base64url')
-        rooms.set(id, createRoom(id, Date.now(), user.id, `${user.name}'s room`))
+        const now = Date.now()
+        const room = createRoom(randomBytes(16).toString('base64url'), now, user.id, `${user.name}'s room`)
+        const at = (await readJson(req)).startsAt
+        if (at !== undefined && at !== null && !(typeof at === 'number' && apply(room, { type: 'schedule', at }, true, now))) {
+            return sendJson(res, 400, { error: 'Pick a time in the future, within 30 days' })
+        }
+        const id = room.id
+        rooms.set(id, room)
         lock(id, hostPassword(user.id))
         return sendJson(res, 200, { id })
     }
@@ -1165,7 +1178,7 @@ const announced = new Map<string, string>() // room id -> item last announced as
 /** Posts to the server's Discord channel when the room has announcements on, with its current invite link. */
 function announce(room: Room, text: string): void {
     if (DISCORD_WEBHOOK_URL && room.announce) {
-        postToDiscord(DISCORD_WEBHOOK_URL, `${text}\nJoin: ${inviteLink(room)}`)
+        postToDiscord(DISCORD_WEBHOOK_URL, `${text}\nJoin: ${publicOrigin ?? PUBLIC_URL}${inviteLink(room)}`)
     }
 }
 

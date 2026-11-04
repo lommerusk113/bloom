@@ -78,14 +78,35 @@ async function start() {
         return
     }
     account(me.user)
-    // every host has one room, made on first visit: straight into it
-    const room = (await api('/api/rooms')).find(r => r.id === roomId)
+    // each host has at most one room; without one, they start it (now or scheduled)
+    const rooms = await api('/api/rooms')
+    const room = rooms.find(r => r.id === roomId)
     if (room) {
         manage(room)
-        return
+    } else if (rooms.length) {
+        location.replace(`/?room=${rooms[0].id}`)
+    } else {
+        offerStart()
     }
-    const { id } = await api('/api/rooms', { method: 'POST' })
-    location.replace(`/?room=${id}`)
+}
+
+function offerStart() {
+    $('manage').hidden = false
+    $('layout').hidden = true
+    $('libraries').hidden = true
+    $('searchForm').hidden = true
+    $('endRoom').hidden = true
+    $('startForm').hidden = false
+    $('startForm').onsubmit = async (event) => {
+        event.preventDefault()
+        const value = $('startAt').value
+        try {
+            const { id } = await postJson('/api/rooms', { startsAt: value ? new Date(value).getTime() : null }) // datetime-local is local time
+            location.replace(`/?room=${id}`)
+        } catch (err) {
+            showStatus(err.message)
+        }
+    }
 }
 
 /** The sign-in page: Jellyfin's server name, over this week's trending artwork when TMDB is set up. */
@@ -128,7 +149,7 @@ function account(user) {
 /** The guest link; its key renews daily, so the page always shows the current one. */
 function showLink(link) {
     if (link) {
-        $('link').value = link
+        $('link').value = location.origin + link // the address the host uses is the one guests can reach
     }
 }
 
@@ -197,7 +218,7 @@ function manage(room) {
             showStatus(msg.message)
         } else if (msg.type === 'gone') {
             state = null
-            showStatus('This room no longer exists')
+            location.replace('/') // ended elsewhere or closed while empty: offer to start a new one
         } else if (msg.type === 'state') {
             state = msg
             render()

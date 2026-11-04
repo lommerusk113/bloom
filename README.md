@@ -37,7 +37,7 @@ Bloom never encodes video itself. Every guest gets an HLS stream from Jellyfin (
 | `JELLYFIN_API_KEY` | yes | API key from step 1 |
 | `JELLYFIN_USER_ID` | no | Run as this Jellyfin user (default: the first administrator); limits libraries to that user's |
 | `DATA_DIR` | no | Where login sessions are stored; `/data` in Docker, `./data` otherwise |
-| `PUBLIC_URL` | behind a reverse proxy | External URL; its host is accepted as the websocket Origin and `https://` enables the Secure cookie flag |
+| `PUBLIC_URL` | recommended | External URL, e.g. `https://watch.example.com`; used in Discord links (otherwise the address hosts sign in on), its host is accepted as the websocket Origin and `https://` enables the Secure cookie flag |
 | `TMDB_API_KEY` | no | Free key from themoviedb.org (Settings → API); adds “Trending this week” and “Popular right now” rows for titles in your library |
 | `GIPHY_API_KEY` | no | Free key from developers.giphy.com (Create an App → API); adds GIF search to the chat |
 | `DISCORD_WEBHOOK_URL` | no | A Discord channel webhook (Channel settings → Integrations → Webhooks); hosts can then announce their room there |
@@ -56,7 +56,7 @@ Behind **Pangolin** (or another proxy outside Coolify) skip the Coolify domain: 
 ## Using it
 
 1. Log in with your Jellyfin username and password. Any enabled Jellyfin user can host; users are managed in Jellyfin, and disabling one there logs them out of Bloom and ends their rooms within 30 seconds. The host's watch progress is saved to their Jellyfin account (resume points and watched status); guests' isn't. Jellyfin administrators get **Admin**: every open room with who is watching and their connection speed, active streams, Jellyfin's status and users, and ending rooms.
-2. Signing in takes you straight to your room (each host has one; it's made on first visit). Search and add things to the queue; each host only sees the libraries their Jellyfin account can. Nobody else can manage it. **Movie nights** lists every scheduled room for all signed-in hosts, with a calendar file; only the owner gets a link in.
+2. Press **Start room**, now or scheduled for later, to get the invite link and password (each host has one room at a time). Search and add things to the queue; each host only sees the libraries their Jellyfin account can. Nobody else can manage it. **Movie nights** lists every scheduled room for all signed-in hosts, with a calendar file; only the owner gets a link in.
 3. Share the room's invite link. Guests need no account: they enter a name and watch. The link's key renews every 24 hours (the old one keeps working for an hour), so old links stop letting new people in; guests already in stay in. Guests suggest titles from TMDB's catalogue, so a link never reveals what the library holds.
 4. Every room has a **password** under Invite; guests enter it once, besides opening the link (you never need it). Your first room gets one like `otter-maple-42`; change it and Bloom remembers yours for your next rooms. Share it separately from the link.
 5. **Guests may pause, seek and skip** decides whether guests may control playback; the host always can.

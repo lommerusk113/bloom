@@ -53,7 +53,15 @@
         </header>
         <p id="status" class="banner" hidden></p>
 
-        <div class="layout">
+        <form id="startForm" class="panel start-room" hidden>
+            <h2>Start a room</h2>
+            <p class="muted">You get an invite link and password to share. The room closes when you end it, or 5 minutes after everyone leaves.</p>
+            <label>Starts (optional)<input id="startAt" type="datetime-local"></label>
+            <p class="muted small">Scheduled rooms stay open until then and show on Movie nights.</p>
+            <button class="primary">Start room</button>
+        </form>
+
+        <div id="layout" class="layout">
             <div class="browse">
                 <div id="crumbs" class="crumbs" hidden></div>
                 <div id="filters" class="filters" hidden>

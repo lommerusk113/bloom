@@ -342,3 +342,6 @@ h2.shelf-title { margin: 0 auto 0 0; }
 .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .8em; background: var(--raised); border: 1px solid var(--border); }
 .tag.on { border-color: var(--accent); color: var(--accent); }
 .tag.off { color: var(--error); }
+
+.start-room { max-width: 440px; margin: 48px auto; display: grid; gap: 12px; }
+.start-room label { display: grid; gap: 6px; }

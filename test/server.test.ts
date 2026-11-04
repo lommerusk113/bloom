@@ -15,7 +15,7 @@ const BASE = `http://127.0.0.1:${PORT}`
 let server: ChildProcess
 const MOVIE = 'a'.repeat(32)
 /** Jellyfin accounts the fake accepts: name -> password. */
-const ACCOUNTS: Record<string, string> = { admin: 'admin-pw', alice: 'secret1', bob: 'secret1' }
+const ACCOUNTS: Record<string, string> = { admin: 'admin-pw', alice: 'secret1', bob: 'secret1', carol: 'secret1' }
 /** Fails /System/Info (so the startup check reports an error) but lists one movie, enough to queue it, and checks logins. */
 const fakeJellyfin = createServer(async (req, res) => {
     if (req.url === '/Users/AuthenticateByName') {
@@ -83,7 +83,7 @@ async function invited(roomId: string, hostCookie: string, withPassword = true):
     const rooms = (await (await fetch(`${BASE}/api/rooms`, { headers: { cookie: hostCookie } })).json()) as Array<{ id: string; link: string; password: string }>
     const room = rooms.find(r => r.id === roomId)!
     const post = (path: string, body: unknown, cookie = '') => fetch(`${BASE}/api/rooms/${roomId}/${path}`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify(body) })
-    const res = await post('invite', { key: new URL(room.link).searchParams.get('i') })
+    const res = await post('invite', { key: new URL(room.link, BASE).searchParams.get('i') })
     assert.equal(res.status, 200)
     const admission = res.headers.get('set-cookie')!.split(';')[0]
     if (!withPassword) {
@@ -120,6 +120,21 @@ test('host-only endpoints require login', async () => {
     assert.equal((await fetch(`${BASE}/api/rooms`, { method: 'POST' })).status, 403)
     const wrong = await fetch(`${BASE}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'nope' }) })
     assert.equal(wrong.status, 401)
+})
+
+test('a room is started on request, optionally scheduled, and its link works behind any address', async () => {
+    const carol = await login('carol', 'secret1')
+    const start = (body: unknown) => fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie: carol, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    assert.equal((await start({ startsAt: Date.now() - 1000 })).status, 400)
+    assert.equal((await start({ startsAt: 'soon' })).status, 400)
+    const at = Date.now() + 3600_000
+    const { id } = (await (await start({ startsAt: at })).json()) as { id: string }
+    const [room] = (await (await fetch(`${BASE}/api/rooms`, { headers: { cookie: carol } })).json()) as Array<{ link: string }>
+    assert.match(room.link, /^\/r\/[\w-]+\?i=/) // the page puts its own origin in front
+    const nights = (await (await fetch(`${BASE}/api/nights`, { headers: { cookie: carol } })).json()) as Array<{ startsAt: number }>
+    assert.ok(nights.some(n => n.startsAt === at))
+    assert.equal((await fetch(`${BASE}/api/rooms/${id}`, { method: 'DELETE', headers: { cookie: carol } })).status, 200)
+    assert.deepEqual(await (await fetch(`${BASE}/api/rooms`, { headers: { cookie: carol } })).json(), []) // ended stays ended
 })
 
 test('users only see, host and end their own rooms', async () => {
