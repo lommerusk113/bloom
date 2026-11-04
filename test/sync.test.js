@@ -58,3 +58,9 @@ test('joinLead grows for slow connections and stays within 4s..MAX_JOIN_LEAD', (
     assert.equal(joinLead(10e6, 20e6), 9)
     assert.equal(joinLead(40e6, 1e6), MAX_JOIN_LEAD)
 })
+
+test('cleanVtt drops stray cue numbers and ASS tags but keeps real numbers', async () => {
+    const { cleanVtt } = await import('../web/playback.js')
+    const vtt = 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n{\\an8}Hello there\n2\n\n00:00:03.000 --> 00:00:04.000\n1984\n'
+    assert.equal(cleanVtt(vtt), 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello there\n\n00:00:03.000 --> 00:00:04.000\n1984\n')
+})

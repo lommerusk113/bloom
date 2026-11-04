@@ -4,6 +4,25 @@ export const proxied = (roomId, path) => `/r/${roomId}/jf${path}`
 
 export const subtitlePath = (itemId, sourceId, index) => `/Videos/${itemId}/${sourceId}/Subtitles/${index}/0/Stream.vtt`
 
+/**
+ * Tidies converted subtitles: drops a cue's trailing line that is only a number (the next SRT cue's index,
+ * left behind when a file lacks the blank line between cues) and ASS override tags such as {\an8}.
+ */
+export function cleanVtt(text) {
+    return text.split(/\r?\n(?:[ \t]*\r?\n)+/).map((block) => {
+        const lines = block.split(/\r?\n/)
+        const timing = lines.findIndex(line => line.includes('-->'))
+        if (timing < 0) {
+            return block
+        }
+        const cue = lines.slice(timing + 1).map(line => line.replace(/\{\\[^}]*\}/g, ''))
+        while (cue.length > 1 && /^\s*\d+\s*$/.test(cue.at(-1))) {
+            cue.pop()
+        }
+        return [...lines.slice(0, timing + 1), ...cue].join('\n')
+    }).join('\n\n')
+}
+
 /** Asks Jellyfin to end the transcode behind a TranscodingUrl; best effort, also while the page unloads. */
 export function stopStream(roomId, transcodingUrl) {
     const id = new URL(transcodingUrl, location.origin).searchParams.get('PlaySessionId')

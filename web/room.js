@@ -1,6 +1,6 @@
 import { connectRoom } from './ws.js'
 import { adaptLead, decide, joinLead, nextBackoff, targetPosition } from './sync.js'
-import { deviceProfile, playbackInfo, proxied, stopStream, subtitlePath } from './playback.js'
+import { cleanVtt, deviceProfile, playbackInfo, proxied, stopStream, subtitlePath } from './playback.js'
 import { setupCast } from './cast.js'
 
 const $ = (id) => document.getElementById(id)
@@ -29,6 +29,12 @@ let loadedOnce = false
 let catchUp = null    // { at, lead }: loading ahead of the room alone; starts playing when the room reaches `at`
 let speedMbps = null  // measured download speed from the server
 let speedTest = Promise.resolve()
+let autoCap = null    // bps ceiling for Auto, lowered each time playback keeps stalling
+let stalls = []       // times playback froze mid-stream, for lowering Auto
+let lastTime = -1     // currentTime at the previous sync tick
+let wasFrozen = false
+let streamPlayed = false // the attached stream has played: freezes after this are stalls, not its startup
+let segments = { itemId: null, list: [] } // intro/credits ranges of the playing item
 
 function recall(key) {
     try {
@@ -251,6 +257,7 @@ function attach(src) {
     hls = null
     pendingSeek = false
     mediaErrors = 0
+    streamPlayed = false
     if (window.Hls?.isSupported()) {
         const token = loadToken
         hls = new Hls({ startPosition: catchUp?.at ?? currentTarget() })
@@ -293,6 +300,7 @@ function recoverMedia() {
 function clearSubtitles() {
     for (const track of video.querySelectorAll('track')) {
         track.track.mode = 'disabled' // a removed <track> can keep rendering in some browsers
+        URL.revokeObjectURL(track.src)
         track.remove()
     }
 }
@@ -304,13 +312,20 @@ function showSubtitles() {
     if (!stream?.IsTextSubtitleStream) {
         return
     }
-    const track = document.createElement('track')
-    track.kind = 'subtitles'
-    track.label = stream.DisplayTitle
-    track.src = proxied(roomId, subtitlePath(itemId, source.Id, stream.Index))
-    track.default = true
-    video.append(track)
-    track.track.mode = 'showing'
+    const token = loadToken
+    fetch(proxied(roomId, subtitlePath(itemId, source.Id, stream.Index))).then(res => res.ok ? res.text() : Promise.reject()).then((text) => {
+        if (token !== loadToken || prefs.subs !== stream.Index) {
+            return // another stream or subtitle was picked meanwhile
+        }
+        clearSubtitles()
+        const track = document.createElement('track')
+        track.kind = 'subtitles'
+        track.label = stream.DisplayTitle
+        track.src = URL.createObjectURL(new Blob([cleanVtt(text)], { type: 'text/vtt' }))
+        track.default = true
+        video.append(track)
+        track.track.mode = 'showing'
+    }).catch(() => {})
 }
 
 function fill(select, options, selected) {
@@ -349,6 +364,7 @@ $('subs').onchange = () => {
 $('quality').value = recall('wp_quality') ?? 'auto'
 $('quality').onchange = () => {
     store('wp_quality', $('quality').value)
+    autoCap = null
     if (current) {
         reloadAlone()
     }
@@ -360,24 +376,29 @@ function reloadAlone() {
     load(current.itemId, true)
 }
 
-/** Max bitrate to ask Jellyfin for: the picked quality, or for Auto 70% of the measured speed. null: the original. */
+/**
+ * Max bitrate to ask Jellyfin for: the picked quality, or for Auto half the measured speed (Wi-Fi swings well below
+ * a speed test), lowered further after repeated stalls. null: the original.
+ */
 function bitrate() {
     const picked = $('quality').value
     if (picked !== 'auto') {
         return Number(picked) || null
     }
     // Jellyfin takes an int32: a fast LAN would overflow it
-    return speedMbps === null ? null : Math.min(Math.max(1_500_000, Math.round(speedMbps * 700_000)), 120_000_000)
+    const measured = speedMbps === null ? Infinity : Math.max(1_500_000, Math.round(speedMbps * 500_000))
+    const cap = Math.min(measured, autoCap ?? Infinity, 120_000_000)
+    return cap === Infinity ? null : cap
 }
 
-/** Times a download from the server for up to 3s; reports the speed to the room for the admin dashboard. */
+/** Times a download from the server for up to 5s; reports the speed to the room for the admin dashboard. */
 async function measureSpeed() {
     try {
         const started = performance.now()
         const res = await fetch(`/r/${roomId}/speedtest`, { cache: 'no-store' })
         const reader = res.body.getReader()
         let bytes = 0
-        while (performance.now() - started < 3000) {
+        while (performance.now() - started < 5000) {
             const { done, value } = await reader.read()
             if (done) {
                 break
@@ -571,9 +592,49 @@ function render() {
 
 // --- sync ---
 
+/** Three stalls within a minute on Auto: reload alone at 60% of the bitrate it played at. */
+function noteStall() {
+    const now = Date.now()
+    stalls = [...stalls.filter(at => now - at < 60_000), now]
+    if (stalls.length < 3 || $('quality').value !== 'auto' || !current?.source) {
+        return
+    }
+    stalls = []
+    const playedAt = Math.min(bitrate() ?? Infinity, current.source.Bitrate || 8_000_000)
+    autoCap = Math.max(1_000_000, Math.round(playedAt * 0.6))
+    $('speed').textContent = `Playback kept stalling: Auto lowered to ${(autoCap / 1e6).toFixed(1)} Mbps`
+    load(current.itemId, true)
+}
+
+const SKIP_LABELS = { Intro: 'Skip intro', Recap: 'Skip recap', Outro: 'Skip credits', Preview: 'Skip preview' }
+
+/** Shows "Skip intro"/"Skip credits" while the room is inside such a segment, for viewers who may control playback. */
+function showSkip(target, local) {
+    const { room } = state
+    const item = room.queue[room.index]
+    if (item && segments.itemId !== item.id) {
+        segments = { itemId: item.id, list: [] }
+        fetch(`/r/${roomId}/segments`).then(res => res.ok ? res.json() : []).then((list) => {
+            if (segments.itemId === item.id) {
+                segments.list = list
+            }
+        }).catch(() => {})
+    }
+    const segment = segments.list.find(s => target >= s.start && target < s.end - 1)
+    const canControl = isHost || room.guestControl
+    $('skip').hidden = !segment || !canControl || (!local && !cast?.active())
+    if (segment) {
+        $('skip').textContent = SKIP_LABELS[segment.type] ?? 'Skip'
+        // credits that run to the end: on to the next item instead of the last second of this one
+        const toEnd = segment.end >= (item.runtime || Infinity) - 2 && room.index < room.queue.length - 1
+        $('skip').onclick = () => command(toEnd ? { type: 'next' } : { type: 'seek', position: segment.end })
+    }
+}
+
 video.addEventListener('waiting', () => { stalled = true })
 video.addEventListener('playing', () => {
     stalled = false
+    streamPlayed = true
     personal = false
     retry = { itemId: null, delay: 0 } // the stream works: the next failure starts the backoff over
 })
@@ -628,7 +689,20 @@ function syncNow() {
     const runtime = room.queue[room.index]?.runtime ?? 0
     const target = currentTarget()
     const local = !cast?.active() && current?.source && video.readyState > 0
-    reportBuffering(Boolean(room.queue[room.index]) && !cast?.active() && (!local || video.seeking || stalled || video.readyState < 3))
+    // readyState and 'waiting' flicker on healthy streams: moving playback is never loading
+    const advancing = local && !video.paused && video.currentTime !== lastTime
+    const frozen = local && playing && !video.paused && !video.seeking && lastTime >= 0 && video.currentTime === lastTime
+    lastTime = local ? video.currentTime : -1
+    if (advancing) {
+        stalled = false
+    }
+    if (frozen && !wasFrozen && streamPlayed && Date.now() - lastSeekedAt > 4000) {
+        noteStall()
+    }
+    wasFrozen = frozen
+    stalled ||= frozen
+    reportBuffering(Boolean(room.queue[room.index]) && !cast?.active() && !advancing && (!local || video.seeking || stalled || video.readyState < 3))
+    showSkip(target, local)
     const waitingFor = state.waitingFor.filter(name => name !== myName)
     $('wait').textContent = room.waiting ? `Waiting for ${waitingFor.join(', ') || 'you'} to load…` : ''
     // the counter shows this player's own position, so it stops while it loads

@@ -164,6 +164,13 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
             return (item?.MediaStreams ?? []).filter(s => s.Type === 'Subtitle').map(s => s.Index)
         },
 
+        /** Intro, recap, credits and preview ranges in seconds; empty without a segment plugin such as Intro Skipper. */
+        async segments(itemId: string): Promise<Segment[]> {
+            const res = await json<{ Items: Array<{ Type: string; StartTicks: number; EndTicks: number }> }>(`/MediaSegments/${encodeURIComponent(itemId)}`)
+            return res.Items.filter(s => SKIPPABLE.has(s.Type))
+                .map(s => ({ type: s.Type, start: s.StartTicks / TICKS_PER_SECOND, end: s.EndTicks / TICKS_PER_SECOND }))
+        },
+
         /** Resolves a movie/episode to itself and a series/season to its episodes in order. */
         async queueItems(id: string): Promise<QueueItem[]> {
             if (!/^[0-9a-f-]{32,36}$/i.test(id)) {
@@ -186,6 +193,7 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
 }
 
 const PAGE = 60
+const SKIPPABLE = new Set(['Intro', 'Recap', 'Outro', 'Preview'])
 const PLAYABLE = new Set(['Movie', 'Episode', 'Series', 'Season'])
 const INDEX_TTL_MS = 10 * 60_000
 const VIDEO_LIBRARIES = new Set(['movies', 'tvshows', 'mixed', 'homevideos'])
@@ -198,6 +206,8 @@ const SORTS: Record<string, Record<string, string>> = {
 
 /** What the host's catalogue shows: title, a line below it, and the full label used in the queue. */
 export type Card = { id: string; name: string; type: string; title: string; subtitle: string; rating: number | null }
+
+export type Segment = { type: string; start: number; end: number }
 
 export type RemoteSubtitle = { id: string; name: string; provider: string; format: string; downloads: number; exact: boolean }
 

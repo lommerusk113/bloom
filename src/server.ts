@@ -45,6 +45,7 @@ const users = createUsers(process.env.DATA_DIR || join(import.meta.dirname, '..'
 const STARTED_AT = Date.now()
 /** Random bytes viewers download to measure their speed; random so no proxy can compress them. */
 const SPEED_TEST = randomBytes(4_000_000)
+const SPEED_TEST_REPEATS = 10
 const LANGUAGE = /^[a-z]{3}$/
 const tmdb = process.env.TMDB_API_KEY ? createTmdb(process.env.TMDB_API_KEY) : null
 /** Room passwords, kept out of Room so they are never broadcast. */
@@ -214,7 +215,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         return proxyRequest(req, res, room, proxied[2] + url.search, jf)
     }
 
-    const roomTool = /^\/r\/([\w-]+)\/(speedtest|subtitles)$/.exec(path)
+    const roomTool = /^\/r\/([\w-]+)\/(speedtest|subtitles|segments)$/.exec(path)
     if (roomTool) {
         const room = rooms.get(roomTool[1])
         if (!room) {
@@ -224,8 +225,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             return sendJson(res, 401, { error: 'Room password required' })
         }
         if (roomTool[2] === 'speedtest') {
-            res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': SPEED_TEST.length, 'cache-control': 'no-store' }).end(SPEED_TEST)
+            // long enough that a burst into router/proxy buffers doesn't pass for the sustained speed
+            res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': SPEED_TEST.length * SPEED_TEST_REPEATS, 'cache-control': 'no-store' })
+            for (let i = 0; i < SPEED_TEST_REPEATS && !res.destroyed; i++) {
+                if (!res.write(SPEED_TEST)) {
+                    await new Promise(resolve => { res.once('drain', resolve); res.once('close', resolve) })
+                }
+            }
+            res.end()
             return
+        }
+        if (roomTool[2] === 'segments') {
+            const item = room.queue[room.index]
+            return sendJson(res, 200, item ? await jf.segments(item.id).catch(() => []) : [])
         }
         return subtitles(req, res, room, url)
     }
