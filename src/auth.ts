@@ -63,6 +63,17 @@ export function createAuth(password: string, secure: boolean, cookieName = 'wp_h
             return token !== undefined && tokens.has(token)
         },
 
+        /** The request's valid token, if any. */
+        tokenOf(req: IncomingMessage): string | null {
+            const token = parseCookies(req.headers.cookie).get(cookieName)
+            return token !== undefined && tokens.has(token) ? token : null
+        },
+
+        /** Accepts a token issued under an earlier password, e.g. for viewers still watching when it changed. */
+        adopt(token: string): void {
+            tokens.add(token)
+        },
+
         cookie: (token: string): string => sessionCookie(cookieName, token, secure),
     }
 }

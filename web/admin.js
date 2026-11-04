@@ -109,7 +109,7 @@ function render({ server, rooms, users, history }) {
         const watching = el('div', 'chips')
         watching.append(...r.viewers.map(v => tag(`${v.name}${v.host ? ' ★' : ''} · ${v.speed ? `${v.speed} Mbps` : '…'}${v.buffering ? ' · loading' : ''}`, v.speed && v.speed < 5 ? 'off' : '')))
         const name = el('div')
-        name.append(el('strong', '', r.name), ' ', ...(r.password ? [tag('🔒')] : []))
+        name.append(el('strong', '', r.name))
         return row(
             name,
             r.owner,

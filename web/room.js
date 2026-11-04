@@ -2,8 +2,9 @@ import { connectRoom } from './ws.js'
 import { adaptLead, decide, joinLead, nextBackoff, targetPosition } from './sync.js'
 import { cleanVtt, deviceProfile, MAX_BITRATE, ORIGINAL_BITRATE, playbackInfo, proxied, stopStream, subtitlePath } from './playback.js'
 import { setupCast } from './cast.js'
-
-const $ = (id) => document.getElementById(id)
+import { $, clock, listItem, recall, store } from './util.js'
+import { setupChat } from './chat.js'
+import { setupOverlays } from './overlays.js'
 const video = $('video')
 const roomId = location.pathname.split('/')[2]
 /** Inside the room settings page's small player: fullscreen and "back" act on that page's frame. */
@@ -38,23 +39,6 @@ let stalls = []       // times playback froze mid-stream, for lowering Auto
 let lastTime = -1     // currentTime at the previous sync tick
 let wasFrozen = false
 let streamPlayed = false // the attached stream has played: freezes after this are stalls, not its startup
-let segments = { itemId: null, list: [] } // intro/credits ranges of the playing item
-
-function recall(key) {
-    try {
-        return localStorage.getItem(key)
-    } catch {
-        return null
-    }
-}
-
-function store(key, value) {
-    try {
-        localStorage.setItem(key, value)
-    } catch {
-        // private mode: not remembered, still works
-    }
-}
 
 const deviceId = recall('wp_device') ?? (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2))
 store('wp_device', deviceId)
@@ -183,9 +167,8 @@ function onMessage(msg) {
     if (msg.type === 'welcome') {
         isHost = msg.isHost
         myId = msg.id
-        $('gifButton').hidden = !msg.gifs
-        $('suggestButton').hidden = !msg.suggest // suggestions search TMDB
-        showChatHistory(msg.chat)
+        chat.configure(msg)
+        chat.showHistory(msg.chat)
         reportedBuffering = false // a new connection starts out not buffering on the server
         if (speedMbps !== null) {
             socket.send({ type: 'speed', value: speedMbps })
@@ -196,11 +179,11 @@ function onMessage(msg) {
         return
     }
     if (msg.type === 'chat') {
-        addChatMessage(msg.message)
+        chat.add(msg.message)
         return
     }
     if (msg.type === 'reaction') {
-        showReaction(msg.emoji, msg.name)
+        overlays.showReaction(msg.emoji, msg.name)
         return
     }
     if (msg.type === 'error') {
@@ -208,7 +191,7 @@ function onMessage(msg) {
         return
     }
     if (msg.type === 'locked') {
-        // the host set a password after this page loaded: back to the join form, which now asks for it
+        // no longer let in (e.g. the server restarted and forgot the password token): back to the join form
         location.reload()
         return
     }
@@ -575,6 +558,37 @@ async function measureSpeed() {
 // --- controls ---
 
 const command = (cmd) => socket.send({ type: 'cmd', cmd })
+const canControl = () => Boolean(state) && (isHost || state.room.guestControl)
+
+const chat = setupChat({
+    roomId,
+    small: Boolean(frame), // the settings page's player is too small for it
+    send: msg => socket?.send(msg),
+    myName: () => myName,
+    jumpTo(itemId, position) {
+        const room = state?.room
+        if (room?.queue[room.index]?.id !== itemId) {
+            return 'Sent during another title'
+        }
+        if (!canControl()) {
+            return 'Only the host can seek'
+        }
+        command({ type: 'seek', position })
+        return null
+    },
+})
+
+const overlays = setupOverlays({
+    roomId,
+    state: () => state,
+    canControl,
+    command,
+    send: msg => socket?.send(msg),
+    myId: () => myId,
+    serverNow: () => socket.serverNow(),
+    currentTarget: () => currentTarget(),
+    castActive: () => Boolean(cast?.active()),
+})
 const CONTROLS = ['toggle', 'seek', 'next', 'back', 'forward']
 const PLAY_ICON = 'M8 5v14l11-7z'
 const PAUSE_ICON = 'M6 19h4V5H6v14zm8-14v14h4V5h-4z'
@@ -670,13 +684,6 @@ $('subSearch').onsubmit = async (event) => {
     }))
 }
 
-function listItem(text, ...children) {
-    const li = document.createElement('li')
-    li.textContent = text
-    li.append(...children)
-    return li
-}
-
 async function downloadSubtitle(sub, pick) {
     pick.disabled = true
     pick.textContent = 'Downloading…'
@@ -733,7 +740,7 @@ const KEYS = {
     KeyM: () => $('mute').click(),
     KeyF: () => $('fullscreen').click(),
     KeyP: () => $('pip').hidden || $('pip').click(),
-    KeyC: () => setChatOpen($('chat').hidden),
+    KeyC: () => chat.toggle(),
 }
 document.addEventListener('keydown', (event) => {
     const typing = ['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target.tagName) || (event.code === 'Space' && event.target.tagName === 'BUTTON')
@@ -761,27 +768,19 @@ $('pip').onclick = () => {
     }
 }
 
-function clock(seconds) {
-    const s = Math.max(0, Math.floor(seconds))
-    const h = Math.floor(s / 3600)
-    const m = Math.floor(s / 60) % 60
-    const sec = String(s % 60).padStart(2, '0')
-    return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`
-}
-
 function render() {
     const { room, viewers } = state
-    renderVote()
     const item = room.queue[room.index]
-    const canControl = isHost || room.guestControl
+    overlays.render(room, item)
+    const mayControl = canControl()
     for (const id of CONTROLS) {
-        $(id).disabled = !canControl || !item
+        $(id).disabled = !mayControl || !item
     }
     $('toggle').querySelector('path').setAttribute('d', room.playing ? PAUSE_ICON : PLAY_ICON)
     $('seek').max = String(Math.floor(item?.runtime ?? 0))
     $('title').textContent = item?.name ?? 'Waiting for the host to pick something…'
     document.title = `${room.name} · Bloom`
-    $('lock').hidden = canControl
+    $('lock').hidden = mayControl
     const chip = (text, title = '') => {
         const span = document.createElement('span')
         span.className = 'chip'
@@ -790,7 +789,6 @@ function render() {
         return span
     }
     $('viewers').replaceChildren(...viewers.map(v => chip(v.name)))
-    showMediaSession(room, item)
 }
 
 // --- sync ---
@@ -823,360 +821,6 @@ function showCountdown(room) {
         const days = Math.floor(s / 86_400)
         $('countdownTime').textContent = days ? `${days}d ${clock(s % 86_400)}` : clock(s)
         $('countdownAt').textContent = new Date(room.startsAt).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-    }
-}
-
-// --- chat: opens beside the video, Discord style, and stays in fullscreen ---
-
-let unread = 0
-
-function setChatOpen(open) {
-    $('chat').hidden = !open
-    $('player').classList.toggle('chat-open', open)
-    $('chatButton').setAttribute('aria-expanded', String(open))
-    store('wp_chat', open ? '1' : '0')
-    if (open) {
-        unread = 0
-        $('unread').hidden = true
-        $('chatLog').scrollTop = $('chatLog').scrollHeight
-    } else {
-        $('gifPicker').hidden = true
-    }
-}
-$('chatButton').onclick = (event) => {
-    event.stopPropagation()
-    setChatOpen($('chat').hidden)
-}
-$('chatClose').onclick = () => setChatOpen(false)
-setChatOpen(!frame && recall('wp_chat') === '1') // the small player on the settings page is too small for it
-
-function showChatHistory(messages) {
-    $('chatLog').replaceChildren()
-    messages.forEach(m => addChatMessage(m, false))
-    if (!messages.length) {
-        const hint = document.createElement('li')
-        hint.className = 'empty'
-        hint.textContent = 'No messages yet. Say hi!'
-        $('chatLog').append(hint)
-    }
-}
-
-function addChatMessage(message, live = true) {
-    $('chatLog').querySelector('.empty')?.remove()
-    const log = $('chatLog')
-    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40
-    const row = document.createElement('li')
-    const who = document.createElement('span')
-    who.className = 'who'
-    who.textContent = message.name
-    row.title = new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    if (message.position !== null && message.itemId) {
-        // where the movie was when it was said: tap to go back there
-        const at = document.createElement('button')
-        at.className = 'at'
-        at.type = 'button'
-        at.textContent = clock(message.position)
-        at.title = 'Jump here'
-        at.onclick = () => {
-            const room = state?.room
-            if (room?.queue[room.index]?.id === message.itemId && (isHost || room.guestControl)) {
-                command({ type: 'seek', position: message.position })
-            } else {
-                at.disabled = true
-                at.title = room?.queue[room.index]?.id === message.itemId ? 'Only the host can seek' : 'Sent during another title'
-            }
-        }
-        row.append(at)
-    }
-    row.append(who, message.text)
-    if (message.gif) {
-        const img = document.createElement('img')
-        img.src = message.gif.url
-        img.alt = 'GIF'
-        img.width = message.gif.width
-        img.height = message.gif.height
-        img.style.height = 'auto'
-        img.loading = 'lazy'
-        img.referrerPolicy = 'no-referrer'
-        row.append(img)
-    }
-    log.append(row)
-    while (log.children.length > 200) {
-        log.firstElementChild.remove()
-    }
-    if (atBottom || message.name === myName) {
-        log.scrollTop = log.scrollHeight
-    }
-    if (live && $('chat').hidden) {
-        unread++
-        $('unread').textContent = unread > 9 ? '9+' : String(unread)
-        $('unread').hidden = false
-    }
-}
-
-$('chatForm').onsubmit = (event) => {
-    event.preventDefault()
-    const text = $('chatInput').value.trim()
-    if (text && socket) {
-        socket.send({ type: 'chat', text })
-        $('chatInput').value = ''
-    }
-}
-$('chat').onclick = (event) => event.stopPropagation() // clicks in the chat don't toggle playback or close menus
-$('chat').onkeydown = (event) => event.stopPropagation() // typing a space doesn't pause
-
-let gifSearchToken = 0
-async function searchGifs(term) {
-    const token = ++gifSearchToken
-    const res = await fetch(`/r/${roomId}/gifs?q=${encodeURIComponent(term)}`).catch(() => null)
-    const gifs = res?.ok ? await res.json() : []
-    if (token !== gifSearchToken) {
-        return
-    }
-    $('gifResults').replaceChildren(...gifs.map((gif) => {
-        const pick = document.createElement('button')
-        pick.type = 'button'
-        pick.title = gif.title
-        const img = document.createElement('img')
-        img.src = gif.preview
-        img.alt = gif.title
-        img.loading = 'lazy'
-        img.referrerPolicy = 'no-referrer'
-        pick.append(img)
-        pick.onclick = () => {
-            socket.send({ type: 'chat', text: $('chatInput').value.trim(), gif: { url: gif.url, width: gif.width, height: gif.height } })
-            $('chatInput').value = ''
-            $('gifPicker').hidden = true
-        }
-        return pick
-    }))
-}
-$('gifButton').onclick = () => {
-    $('gifPicker').hidden = !$('gifPicker').hidden
-    $('suggestPicker').hidden = true
-    if (!$('gifPicker').hidden) {
-        $('gifSearch').value = ''
-        $('gifSearch').focus()
-        searchGifs('')
-    }
-}
-let gifTimer = 0
-$('gifSearch').oninput = () => {
-    clearTimeout(gifTimer)
-    gifTimer = setTimeout(() => searchGifs($('gifSearch').value), 350)
-}
-$('gifSearch').onkeydown = (event) => {
-    if (event.key === 'Enter') {
-        event.preventDefault() // not a chat send
-    }
-}
-
-// --- suggesting a title from the library: it shows in chat and on the host's page ---
-
-$('suggestButton').onclick = () => {
-    $('suggestPicker').hidden = !$('suggestPicker').hidden
-    $('gifPicker').hidden = true
-    if (!$('suggestPicker').hidden) {
-        $('suggestSearch').focus()
-    }
-}
-let suggestTimer = 0
-let suggestToken = 0
-$('suggestSearch').oninput = () => {
-    clearTimeout(suggestTimer)
-    suggestTimer = setTimeout(async () => {
-        const token = ++suggestToken
-        const term = $('suggestSearch').value.trim()
-        const res = term ? await fetch(`/r/${roomId}/search?q=${encodeURIComponent(term)}`).catch(() => null) : null
-        const found = res?.ok ? await res.json() : []
-        if (token !== suggestToken) {
-            return
-        }
-        $('suggestResults').replaceChildren(...found.map((t) => {
-            const pick = document.createElement('button')
-            pick.type = 'button'
-            const poster = document.createElement('img')
-            poster.alt = ''
-            poster.loading = 'lazy'
-            poster.referrerPolicy = 'no-referrer'
-            if (t.poster) {
-                poster.src = t.poster
-            }
-            const title = document.createElement('span')
-            title.textContent = t.name
-            const sub = document.createElement('small')
-            sub.textContent = t.type === 'Series' ? 'Show' : 'Movie'
-            const text = document.createElement('div')
-            text.append(title, sub)
-            pick.append(poster, text)
-            pick.onclick = () => {
-                socket.send({ type: 'suggest', tmdbId: t.tmdbId, kind: t.type })
-                pick.disabled = true
-                title.textContent = `✓ Suggested ${t.name}`
-            }
-            return listItem('', pick)
-        }))
-    }, 300)
-}
-$('suggestSearch').onkeydown = (event) => {
-    if (event.key === 'Enter') {
-        event.preventDefault()
-    }
-}
-
-// --- phone lock screen and headset buttons ---
-
-const mediaSession = 'mediaSession' in navigator ? navigator.mediaSession : null
-let sessionItem = null
-
-function showMediaSession(room, item) {
-    if (!mediaSession) {
-        return
-    }
-    if (item?.id !== sessionItem) {
-        sessionItem = item?.id ?? null
-        mediaSession.metadata = item
-            ? new MediaMetadata({ title: item.name, artist: room.name, artwork: [{ src: `/r/${roomId}/poster?item=${item.id}`, sizes: '320x480', type: 'image/jpeg' }] })
-            : null
-    }
-    mediaSession.playbackState = room.playing ? 'playing' : 'paused'
-}
-
-/** Lock-screen buttons send room commands like the on-screen ones, when this viewer may control playback. */
-function sessionAction(action, cmd) {
-    try {
-        mediaSession?.setActionHandler(action, () => {
-            if (state && (isHost || state.room.guestControl)) {
-                command(cmd())
-            }
-        })
-    } catch {
-        // the browser doesn't offer this button
-    }
-}
-sessionAction('play', () => ({ type: 'play' }))
-sessionAction('pause', () => ({ type: 'pause' }))
-sessionAction('seekbackward', () => ({ type: 'seek', position: Math.max(0, currentTarget() - 10) }))
-sessionAction('seekforward', () => ({ type: 'seek', position: currentTarget() + 30 }))
-sessionAction('nexttrack', () => ({ type: 'next' }))
-
-function showSessionPosition(position, runtime) {
-    try {
-        if (runtime > 0) {
-            mediaSession?.setPositionState({ duration: runtime, position: Math.min(Math.max(position, 0), runtime), playbackRate: 1 })
-        }
-    } catch {
-        // an older browser without position state
-    }
-}
-
-// --- up next, votes and reactions ---
-
-const UP_NEXT_S = 15
-
-/** The last seconds of an item: what plays next, with "Play now" and "Pause" for viewers who may control playback. */
-function showUpNext(target) {
-    const { room } = state
-    const item = room.queue[room.index]
-    const next = room.queue[room.index + 1]
-    const left = (item?.runtime ?? 0) - target
-    $('upNext').hidden = !next || !room.playing || !item.runtime || left > UP_NEXT_S || left <= 0
-    if ($('upNext').hidden) {
-        return
-    }
-    $('upNextName').textContent = next.name
-    $('upNextIn').textContent = `starting in ${Math.ceil(left)}s`
-    $('upNextActions').hidden = !(isHost || room.guestControl)
-}
-$('upNextPlay').onclick = () => command({ type: 'next' })
-$('upNextPause').onclick = () => command({ type: 'pause' })
-
-function renderVote() {
-    const vote = state.room.vote
-    $('vote').hidden = !vote
-    if (!vote) {
-        return
-    }
-    const ballots = Object.values(vote.ballots)
-    $('voteOptions').replaceChildren(...vote.options.map((option, i) => {
-        const pick = document.createElement('button')
-        pick.classList.toggle('mine', vote.ballots[myId] === i)
-        const count = ballots.filter(b => b === i).length
-        const label = document.createElement('span')
-        label.textContent = option.name
-        const tally = document.createElement('span')
-        tally.className = 'count'
-        tally.textContent = `${count} vote${count === 1 ? '' : 's'}`
-        pick.append(label, tally)
-        pick.onclick = () => socket.send({ type: 'vote', option: i })
-        return pick
-    }))
-    showVoteTime()
-}
-
-function showVoteTime() {
-    const vote = state?.room.vote
-    if (vote) {
-        $('voteIn').textContent = `${Math.max(0, Math.ceil((vote.endsAt - socket.serverNow()) / 1000))}s left`
-    }
-}
-
-const REACTIONS = ['😂', '😢', '😮', '😍', '👏', '😱', '🔥']
-$('reactBar').replaceChildren(...REACTIONS.map((emoji) => {
-    const b = document.createElement('button')
-    b.textContent = emoji
-    b.title = `React ${emoji}`
-    b.onclick = () => socket?.send({ type: 'react', emoji })
-    return b
-}))
-$('reactButton').onclick = (event) => {
-    event.stopPropagation()
-    $('reactBar').hidden = !$('reactBar').hidden
-    $('reactButton').setAttribute('aria-expanded', String(!$('reactBar').hidden))
-}
-$('reactBar').onclick = (event) => event.stopPropagation()
-document.addEventListener('click', () => {
-    $('reactBar').hidden = true
-    $('reactButton').setAttribute('aria-expanded', 'false')
-})
-
-/** Floats someone's reaction up the screen, everyone's own included. */
-function showReaction(emoji, name) {
-    if ($('reactionLayer').childElementCount > 30) {
-        return // a flood would only bury the movie
-    }
-    const bubble = document.createElement('div')
-    bubble.className = 'reaction'
-    bubble.style.left = `${60 + Math.random() * 30}%`
-    const who = document.createElement('small')
-    who.textContent = name
-    bubble.append(emoji, who)
-    bubble.addEventListener('animationend', () => bubble.remove())
-    $('reactionLayer').append(bubble)
-}
-
-const SKIP_LABELS = { Intro: 'Skip intro', Recap: 'Skip recap', Outro: 'Skip credits', Preview: 'Skip preview' }
-
-/** Shows "Skip intro"/"Skip credits" while the room is inside such a segment, for viewers who may control playback. */
-function showSkip(target, local) {
-    const { room } = state
-    const item = room.queue[room.index]
-    if (item && segments.itemId !== item.id) {
-        segments = { itemId: item.id, list: [] }
-        fetch(`/r/${roomId}/segments`).then(res => res.ok ? res.json() : []).then((list) => {
-            if (segments.itemId === item.id) {
-                segments.list = list
-            }
-        }).catch(() => {})
-    }
-    const segment = segments.list.find(s => target >= s.start && target < s.end - 1)
-    const canControl = isHost || room.guestControl
-    $('skip').hidden = !segment || !canControl || (!local && !cast?.active()) || !$('upNext').hidden
-    if (segment) {
-        $('skip').textContent = SKIP_LABELS[segment.type] ?? 'Skip'
-        // credits that run to the end: on to the next item instead of the last second of this one
-        const toEnd = segment.end >= (item.runtime || Infinity) - 2 && room.index < room.queue.length - 1
-        $('skip').onclick = () => command(toEnd ? { type: 'next' } : { type: 'seek', position: segment.end })
     }
 }
 
@@ -1251,9 +895,6 @@ function syncNow() {
     wasFrozen = frozen
     stalled ||= frozen
     reportBuffering(Boolean(room.queue[room.index]) && !cast?.active() && !advancing && (!local || video.seeking || stalled || video.readyState < 3))
-    showUpNext(target)
-    showSkip(target, local)
-    showVoteTime()
     const waitingFor = state.waitingFor.filter(name => name !== myName)
     $('wait').textContent = room.waiting ? `Waiting for ${waitingFor.join(', ') || 'you'} to load…` : ''
     showCountdown(room)
@@ -1263,7 +904,7 @@ function syncNow() {
         $('seek').value = String(Math.floor(position))
     }
     const shown = dragging ? Number($('seek').value) : position
-    showSessionPosition(shown, runtime)
+    overlays.tick(target, local, shown, runtime)
     $('elapsed').textContent = clock(shown)
     $('duration').textContent = clock(runtime)
     $('seek').style.setProperty('--pct', `${runtime ? Math.min(100, (shown / runtime) * 100) : 0}%`)

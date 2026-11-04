@@ -46,10 +46,11 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
         return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
     }
 
-    let tmdbIndex: { at: number; map: Promise<Map<string, Card>> } | null = null
-    const listItems = (query: URLSearchParams) => {
-        if (user) {
-            query.set('userId', user)
+    const tmdbIndex = new Map<string, { at: number; map: Promise<Map<string, Card>> }>() // per user
+    /** as: whose view of the library; Jellyfin then leaves out libraries and ratings that user may not see. */
+    const listItems = (query: URLSearchParams, as = user) => {
+        if (as) {
+            query.set('userId', as)
         }
         return json<{ Items: JfItem[]; TotalRecordCount?: number }>(`/Items?${query}`)
     }
@@ -75,19 +76,19 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
         redact: (text: string): string => text.replaceAll(apiKey, ''),
         systemInfo: () => json<{ ServerName: string; Version: string }>('/System/Info'),
 
-        async search(term: string): Promise<Card[]> {
+        async search(term: string, as?: string): Promise<Card[]> {
             const query = new URLSearchParams({ searchTerm: term, IncludeItemTypes: 'Movie,Series,Episode', Recursive: 'true', Limit: '40' })
-            return (await listItems(query)).Items.map(card)
+            return (await listItems(query, as ?? user)).Items.map(card)
         },
 
         /** The user's video libraries, as Jellyfin's home screen lists them. */
-        async views(): Promise<Array<{ id: string; name: string }>> {
-            const res = await json<{ Items: Array<{ Id: string; Name: string; CollectionType?: string }> }>(`/UserViews?${new URLSearchParams({ userId: user ?? '' })}`)
+        async views(as?: string): Promise<Array<{ id: string; name: string }>> {
+            const res = await json<{ Items: Array<{ Id: string; Name: string; CollectionType?: string }> }>(`/UserViews?${new URLSearchParams({ userId: as ?? user ?? '' })}`)
             return res.Items.filter(v => VIDEO_LIBRARIES.has(v.CollectionType ?? 'mixed')).map(v => ({ id: v.Id, name: v.Name }))
         },
 
         /** One page of a library's movies and shows. */
-        async library(o: { parent: string; genre?: string; sort?: string; start: number }): Promise<{ items: Card[]; total: number }> {
+        async library(o: { parent: string; genre?: string; sort?: string; start: number }, as?: string): Promise<{ items: Card[]; total: number }> {
             const query = new URLSearchParams({
                 ParentId: o.parent, IncludeItemTypes: 'Movie,Series', Recursive: 'true', Limit: String(PAGE), StartIndex: String(o.start),
                 ...SORTS[o.sort ?? ''] ?? SORTS.name,
@@ -95,25 +96,25 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
             if (o.genre) {
                 query.set('Genres', o.genre)
             }
-            const res = await listItems(query)
+            const res = await listItems(query, as ?? user)
             return { items: res.Items.map(card), total: res.TotalRecordCount ?? res.Items.length }
         },
 
         /** Recently added to a library, newest first. */
-        async latest(parent: string): Promise<Card[]> {
-            const query = new URLSearchParams({ ParentId: parent, Limit: '24', userId: user ?? '' })
+        async latest(parent: string, as?: string): Promise<Card[]> {
+            const query = new URLSearchParams({ ParentId: parent, Limit: '24', userId: as ?? user ?? '' })
             return (await json<JfItem[]>(`/Items/Latest?${query}`)).map(card)
         },
 
-        async genres(parent: string): Promise<string[]> {
-            const query = new URLSearchParams({ ParentId: parent, SortBy: 'SortName', userId: user ?? '' })
+        async genres(parent: string, as?: string): Promise<string[]> {
+            const query = new URLSearchParams({ ParentId: parent, SortBy: 'SortName', userId: as ?? user ?? '' })
             return (await json<{ Items: Array<{ Name: string }> }>(`/Genres?${query}`)).Items.map(g => g.Name)
         },
 
         /** Seasons of a series, or episodes of a season, in order. */
-        async children(id: string): Promise<Card[]> {
+        async children(id: string, as?: string): Promise<Card[]> {
             const query = new URLSearchParams({ ParentId: id, IncludeItemTypes: 'Season,Episode', IsMissing: 'false', ExcludeLocationTypes: 'Virtual', SortBy: 'ParentIndexNumber,IndexNumber,SortName' })
-            return (await listItems(query)).Items.map(card)
+            return (await listItems(query, as ?? user)).Items.map(card)
         },
 
         /** The item's poster (or episode thumbnail), or its wide backdrop, resized by Jellyfin. */
@@ -121,8 +122,8 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
             raw(`/Items/${encodeURIComponent(id)}/Images/${backdrop ? 'Backdrop?fillWidth=1600&quality=75' : 'Primary?fillWidth=320&quality=80'}`),
 
         /** Everything the details popup shows about one movie, show or episode. */
-        async details(id: string): Promise<Details | null> {
-            const item = (await listItems(new URLSearchParams({ Ids: id, Fields: 'Overview,Genres' }))).Items[0]
+        async details(id: string, as?: string): Promise<Details | null> {
+            const item = (await listItems(new URLSearchParams({ Ids: id, Fields: 'Overview,Genres' }), as ?? user)).Items[0]
             if (!item) {
                 return null
             }
@@ -138,14 +139,25 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
         },
 
         /** Library movies and shows by TMDB id ("Movie:105", "Series:1399"), to match TMDB lists. */
-        byTmdb(): Promise<Map<string, Card>> {
-            if (!tmdbIndex || Date.now() - tmdbIndex.at > INDEX_TTL_MS) {
-                const query = new URLSearchParams({ IncludeItemTypes: 'Movie,Series', Recursive: 'true', Fields: 'ProviderIds' })
-                const map = listItems(query).then(res => new Map(res.Items.filter(i => i.ProviderIds?.Tmdb).map(i => [`${i.Type}:${i.ProviderIds!.Tmdb}`, card(i)])))
-                map.catch(() => { tmdbIndex = null })
-                tmdbIndex = { at: Date.now(), map }
+        byTmdb(as?: string): Promise<Map<string, Card>> {
+            const who = as ?? user ?? ''
+            const hit = tmdbIndex.get(who)
+            if (hit && Date.now() - hit.at < INDEX_TTL_MS) {
+                return hit.map
             }
-            return tmdbIndex.map
+            const query = new URLSearchParams({ IncludeItemTypes: 'Movie,Series', Recursive: 'true', Fields: 'ProviderIds' })
+            const map = listItems(query, who || undefined).then(res => new Map(res.Items.filter(i => i.ProviderIds?.Tmdb).map(i => [`${i.Type}:${i.ProviderIds!.Tmdb}`, card(i)])))
+            map.catch(() => tmdbIndex.delete(who))
+            tmdbIndex.set(who, { at: Date.now(), map })
+            return map
+        },
+
+        /** Which of these items the user may see. */
+        async visible(ids: string[], as: string): Promise<Set<string>> {
+            if (ids.length === 0) {
+                return new Set()
+            }
+            return new Set((await listItems(new URLSearchParams({ Ids: ids.join(',') }), as)).Items.map(i => i.Id))
         },
 
         /** Subtitles Jellyfin's subtitle plugins (e.g. OpenSubtitles) offer for an item; lang is ISO 639-2, e.g. "eng". */
@@ -218,22 +230,22 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
         },
 
         /** The episode after this one in its show, or null for a movie or a show's last episode. */
-        async nextEpisode(itemId: string): Promise<QueueItem | null> {
-            const item = (await listItems(new URLSearchParams({ Ids: itemId }))).Items[0]
+        async nextEpisode(itemId: string, as?: string): Promise<QueueItem | null> {
+            const item = (await listItems(new URLSearchParams({ Ids: itemId }), as ?? user)).Items[0]
             if (item?.Type !== 'Episode' || !item.SeriesId) {
                 return null
             }
-            const query = new URLSearchParams({ userId: user ?? '', startItemId: item.Id, Limit: '2', IsMissing: 'false' })
+            const query = new URLSearchParams({ userId: as ?? user ?? '', startItemId: item.Id, Limit: '2', IsMissing: 'false' })
             const next = (await json<{ Items: JfItem[] }>(`/Shows/${encodeURIComponent(item.SeriesId)}/Episodes?${query}`)).Items[1]
             return next ? { id: next.Id, name: label(next), runtime: (next.RunTimeTicks ?? 0) / TICKS_PER_SECOND } : null
         },
 
         /** Resolves a movie/episode to itself and a series/season to its episodes in order. */
-        async queueItems(id: string): Promise<QueueItem[]> {
+        async queueItems(id: string, as?: string): Promise<QueueItem[]> {
             if (!/^[0-9a-f-]{32,36}$/i.test(id)) {
                 return [] // an empty Ids filter would list the whole library
             }
-            const found = await listItems(new URLSearchParams({ Ids: id }))
+            const found = await listItems(new URLSearchParams({ Ids: id }), as ?? user)
             const item = found.Items[0]
             if (!item || !PLAYABLE.has(item.Type)) {
                 return []
@@ -241,7 +253,7 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
             let items = [item]
             if (item.Type === 'Series' || item.Type === 'Season') {
                 const query = new URLSearchParams({ ParentId: item.Id, IncludeItemTypes: 'Episode', Recursive: 'true', IsMissing: 'false', ExcludeLocationTypes: 'Virtual', SortBy: 'ParentIndexNumber,IndexNumber' })
-                items = (await listItems(query)).Items
+                items = (await listItems(query, as ?? user)).Items
             }
             return items.map(i => ({ id: i.Id, name: label(i), runtime: (i.RunTimeTicks ?? 0) / TICKS_PER_SECOND }))
         },

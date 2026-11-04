@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Movie nights · Bloom</title>
+<link rel="icon" href="/web/logo.svg" type="image/svg+xml">
+<link rel="manifest" href="/web/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/web/apple-touch-icon.png">
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bloom">
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+<main class="admin nights">
+    <header class="top">
+        <h1 class="brand-title"><img src="/web/logo.svg" alt=""> Movie nights</h1>
+        <a class="button" href="/">‹ My room</a>
+    </header>
+    <p class="muted">Upcoming scheduled nights from every host. Schedule your own from your room's Invite box. To join someone else's, ask them for the link and password.</p>
+    <p id="error" class="banner error" hidden></p>
+    <ol id="nights" class="night-list"></ol>
+    <p id="none" class="empty" hidden>Nothing scheduled yet.</p>
+</main>
+<script type="module" src="/web/nights.js"></script>
+</body>
+</html>

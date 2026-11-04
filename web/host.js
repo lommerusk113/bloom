@@ -743,7 +743,7 @@ function viewerChip(v) {
     const chip = el('span', 'chip', v.host ? `${v.name} ★` : v.name)
     if (!v.host) {
         chip.append(button('✕', () => {
-            if (confirm(`Remove ${v.name} from the room? To keep them out, also set a password.`)) {
+            if (confirm(`Remove ${v.name} from the room? To keep them out, also change the password: everyone still watching stays in.`)) {
                 socket.send({ type: 'kick', id: v.id })
             }
         }, { className: 'kick', title: `Remove ${v.name}` }))

@@ -82,14 +82,14 @@ async function login(username = 'admin', password = 'admin-pw'): Promise<string>
 async function invited(roomId: string, hostCookie: string, withPassword = true): Promise<string> {
     const rooms = (await (await fetch(`${BASE}/api/rooms`, { headers: { cookie: hostCookie } })).json()) as Array<{ id: string; link: string; password: string }>
     const room = rooms.find(r => r.id === roomId)!
-    const post = (path: string, body: unknown) => fetch(`${BASE}/api/rooms/${roomId}/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    const post = (path: string, body: unknown, cookie = '') => fetch(`${BASE}/api/rooms/${roomId}/${path}`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify(body) })
     const res = await post('invite', { key: new URL(room.link).searchParams.get('i') })
     assert.equal(res.status, 200)
     const admission = res.headers.get('set-cookie')!.split(';')[0]
     if (!withPassword) {
         return admission
     }
-    const joined = await post('join', { password: room.password })
+    const joined = await post('join', { password: room.password }, admission)
     assert.equal(joined.status, 200)
     return `${admission}; ${joined.headers.get('set-cookie')!.split(';')[0]}`
 }
@@ -246,6 +246,26 @@ test('guest suggestions never search the library, and accounts share a watchlist
     assert.equal((await fetch(`${BASE}/api/watchlist`)).status, 403)
 })
 
+test('scheduled movie nights are listed for every account, with a calendar file but no way in', async () => {
+    const alice = await login('alice', 'secret1')
+    const bob = await login('bob', 'secret1')
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie: alice } })).json()) as { id: string }
+    const host = openSocket(id, alice)
+    await host.ready
+    const at = Date.now() + 3 * 3600_000
+    host.send({ type: 'cmd', cmd: { type: 'schedule', at } })
+    const nights = async (cookie: string) => (await (await fetch(`${BASE}/api/nights`, { headers: { cookie } })).json()) as Array<{ id: string; host: string; startsAt: number; link: string | null; mine: boolean }>
+    const seen = await waitFor(async () => (await nights(bob)).find(n => n.startsAt === at))
+    assert.deepEqual([seen.mine, seen.link, seen.id.includes(id)], [false, null, false]) // bob still needs alice's invite and password, and never learns the room's address
+    assert.equal((await nights(alice)).find(n => n.startsAt === at)?.link, `/?room=${id}`)
+    const ics = await (await fetch(`${BASE}/api/nights/${seen.id}.ics`, { headers: { cookie: bob } })).text()
+    assert.match(ics, /BEGIN:VEVENT/)
+    assert.doesNotMatch(ics, new RegExp(id)) // never the room's address
+    assert.equal((await fetch(`${BASE}/api/nights`)).status, 403)
+    host.send({ type: 'cmd', cmd: { type: 'schedule', at: null } })
+    host.close()
+})
+
 test('an oversized websocket frame drops only that client', async () => {
     const cookie = await login()
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
@@ -304,7 +324,8 @@ test('every room has a password that keeps out guests until they enter it, and t
     const playbackInfo = (headers = {}) => fetch(`${BASE}/r/${id}/jf/Items/${'a'.repeat(32)}/PlaybackInfo`, { method: 'POST', headers })
     assert.equal((await playbackInfo()).status, 401)
 
-    const join = (password: string) => fetch(`${BASE}/api/rooms/${id}/join`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+    const join = (password: string, cookie = admission) => fetch(`${BASE}/api/rooms/${id}/join`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ password }) })
+    assert.equal((await join('open sesame', '')).status, 403) // the room id alone doesn't let anyone try passwords
     assert.equal((await join('wrong')).status, 401)
     const ok = await join('open sesame')
     assert.equal(ok.status, 200)
@@ -323,6 +344,22 @@ test('every room has a password that keeps out guests until they enter it, and t
     const next = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
     const fresh = (await (await fetch(`${BASE}/api/rooms`, { headers: { cookie } })).json()) as Array<{ id: string; password: string }>
     assert.equal(fresh.find(r => r.id === next.id)?.password, 'open sesame') // remembered for the next room
+})
+
+test('changing the password keeps whoever is watching, and shuts out everyone else', async () => {
+    const cookie = await login('bob', 'secret1')
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
+    const watching = await invited(id, cookie)
+    const away = await invited(id, cookie) // let in once, but not connected when the password changes
+    const viewer = openSocket(id, watching)
+    await viewer.ready
+    await viewer.next(m => m.type === 'welcome')
+    const change = await fetch(`${BASE}/api/rooms/${id}/password`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ password: 'brand new pw' }) })
+    assert.equal(change.status, 200)
+    const allowed = async (guest: string) => ((await (await fetch(`${BASE}/api/rooms/${id}/access`, { headers: { cookie: guest } })).json()) as { allowed: boolean }).allowed
+    assert.equal(await allowed(watching), true)
+    assert.equal(await allowed(away), false)
+    viewer.close()
 })
 
 test('a buffering viewer holds a playing room until it has loaded', async () => {

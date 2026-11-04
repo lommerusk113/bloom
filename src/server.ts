@@ -7,6 +7,7 @@ import { createAuth, parseCookies, sessionCookie } from './auth.ts'
 import { createUsers, type Account } from './users.ts'
 import { createHistory } from './history.ts'
 import { loadJson, saveJson } from './store.ts'
+import { icsEvent, postToDiscord } from './notify.ts'
 import { createJellyfin, type Card, type Segment } from './jellyfin.ts'
 import { createTmdb, type TmdbType } from './tmdb.ts'
 import { activeStreams, proxyRequest, readBody, stopRoomStreams } from './proxy.ts'
@@ -16,7 +17,7 @@ import { apply, createRoom, currentPosition, describe, parseCommand, playNext, v
  * windowStart/count/strikes: websocket rate limit state, see overLimit. bufferingSince: 0 unless the client's player is loading.
  * speed: the viewer's measured download speed in Mbps, 0 until reported.
  */
-type Client = { id: string; ws: WebSocket; name: string; lastReaction: number; lastChat: number; isHost: boolean; observer: boolean; windowStart: number; count: number; strikes: number; bufferingSince: number; speed: number }
+type Client = { id: string; token: string | null; ws: WebSocket; name: string; lastReaction: number; lastChat: number; isHost: boolean; observer: boolean; windowStart: number; count: number; strikes: number; bufferingSince: number; lastBufferStart: number; lastBufferEnd: number; speed: number }
 
 const alive = new WeakSet<WebSocket>()
 
@@ -38,6 +39,7 @@ const MAX_BUFFERED_BYTES = 1_000_000
 const BROADCAST_DELAY_MS = 50
 /** A viewer buffering longer than this no longer holds the room, so one bad connection can't stop everyone. */
 const MAX_WAIT_MS = 15_000
+const BUFFER_RESUME_MS = 3000
 const WEB_DIR = join(import.meta.dirname, '..', 'web')
 const HLS_JS = join(import.meta.dirname, '..', 'node_modules', 'hls.js', 'dist', 'hls.min.js')
 const CONTENT_TYPES: Record<string, string> = {
@@ -213,7 +215,7 @@ function mayJoin(req: IncomingMessage, room: Room): boolean {
         return true
     }
     const lock = locks.get(room.id)
-    return admitted(req, room) && (!lock || lock.auth.isLoggedIn(req))
+    return admitted(req, room) && lock !== undefined && lock.auth.isLoggedIn(req)
 }
 
 // --- invite links: /r/<id>?i=<key>; whoever opens a current one gets a cookie that keeps them in the room ---
@@ -261,8 +263,18 @@ function validInvite(room: Room, key: string, now = Date.now()): boolean {
 }
 
 /** Every room has a password; guests type it once, besides opening a current invite link. */
+/**
+ * Sets the room's password. Viewers connected right now stay in (their token carries over), so changing it
+ * mid-film only keeps out people who aren't watching, like a guest who was just removed.
+ */
 function lock(roomId: string, password: string): void {
-    locks.set(roomId, { password, auth: createAuth(password, SECURE, `wp_room_${roomId}`) })
+    const auth = createAuth(password, SECURE, `wp_room_${roomId}`)
+    for (const client of clients.get(roomId) ?? []) {
+        if (client.token) {
+            auth.adopt(client.token)
+        }
+    }
+    locks.set(roomId, { password, auth })
 }
 
 const PASSWORD_WORDS = ['otter', 'maple', 'comet', 'pixel', 'tiger', 'lemon', 'ember', 'river', 'cloud', 'cedar', 'falcon', 'velvet', 'mango', 'orbit', 'harbor', 'pepper', 'willow', 'nova', 'aurora', 'fjord']
@@ -305,7 +317,6 @@ function overview() {
             owner: names.get(room.owner) ?? '(unknown user)',
             playing: room.queue[room.index]?.name ?? '',
             state: !room.queue[room.index] ? 'idle' : room.waiting ? 'loading' : room.playing ? 'playing' : 'paused',
-            password: locks.has(room.id),
             streams: activeStreams(room, now),
             viewers: viewersOf(room).map(c => ({ name: c.name, host: c.isHost, speed: c.speed, buffering: c.bufferingSince > 0 })),
         })),
@@ -409,6 +420,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         if (path === '/admin') {
             return sendFile(res, join(WEB_DIR, 'admin.html'))
         }
+        if (path === '/nights') {
+            return sendFile(res, join(WEB_DIR, 'nights.html'))
+        }
         if (path === '/api/me') {
             const user = users.fromRequest(req)
             return sendJson(res, 200, { user: user && { name: user.name, admin: user.admin }, jellyfinError, server: jellyfinInfo?.ServerName ?? '' })
@@ -436,12 +450,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             return sendJson(res, 200, { ok: true })
         }
         if (method === 'POST' && roomAccess[2] === 'join') {
-            const lock = locks.get(room.id)
-            const body = await readJson(req)
-            const token = lock?.auth.login(String(body.password ?? ''), req.socket.remoteAddress ?? '')
-            if (!lock) {
-                return sendJson(res, 200, { ok: true })
+            // only someone who opened a current invite link may try passwords: the room id alone isn't enough
+            if (!admitted(req, room)) {
+                return sendJson(res, 403, { error: 'This invite link has expired. Ask the host for the current one.' })
             }
+            const lock = locks.get(room.id)!
+            const token = lock.auth.login(String((await readJson(req)).password ?? ''), req.socket.remoteAddress ?? '')
             if (!token) {
                 return sendJson(res, 401, { error: 'Wrong password' })
             }
@@ -516,27 +530,27 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         return sendJson(res, 200, { ok: true })
     }
     if (method === 'GET' && path === '/api/search') {
-        return sendJson(res, 200, await jf.search(url.searchParams.get('q') ?? ''))
+        return sendJson(res, 200, await jf.search(url.searchParams.get('q') ?? '', user.id))
     }
     const param = (name: string) => url.searchParams.get(name) ?? ''
     if (method === 'GET' && path === '/api/views') {
-        return sendJson(res, 200, await jf.views())
+        return sendJson(res, 200, await jf.views(user.id))
     }
     if (method === 'GET' && path === '/api/library') {
-        return sendJson(res, 200, await jf.library({ parent: param('parent'), genre: param('genre'), sort: param('sort'), start: Math.max(0, Number(param('start')) || 0) }))
+        return sendJson(res, 200, await jf.library({ parent: param('parent'), genre: param('genre'), sort: param('sort'), start: Math.max(0, Number(param('start')) || 0) }, user.id))
     }
     if (method === 'GET' && path === '/api/latest') {
-        return sendJson(res, 200, await jf.latest(param('parent')))
+        return sendJson(res, 200, await jf.latest(param('parent'), user.id))
     }
     if (method === 'GET' && path === '/api/details') {
-        const details = await jf.details(param('id'))
+        const details = await jf.details(param('id'), user.id)
         return details ? sendJson(res, 200, details) : sendJson(res, 404, { error: 'Not found' })
     }
     if (method === 'GET' && path === '/api/discover') {
-        return sendJson(res, 200, tmdb ? await discover() : { enabled: false, shelves: [] })
+        return sendJson(res, 200, tmdb ? await discover(user.id) : { enabled: false, shelves: [] })
     }
     if (method === 'GET' && path === '/api/genres') {
-        return sendJson(res, 200, await jf.genres(param('parent')))
+        return sendJson(res, 200, await jf.genres(param('parent'), user.id))
     }
     if (method === 'GET' && path === '/api/image') {
         const id = url.searchParams.get('id') ?? ''
@@ -555,15 +569,33 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (path === '/api/watchlist' || path.startsWith('/api/watchlist/')) {
         return watchlistApi(req, res, user, method, path)
     }
+    if (method === 'GET' && path === '/api/nights') {
+        return sendJson(res, 200, await upcomingNights(user))
+    }
+    const calendar = method === 'GET' ? /^\/api\/nights\/([\w-]+)\.ics$/.exec(path) : null
+    if (calendar) {
+        const night = (await upcomingNights(user)).find(n => n.id === calendar[1])
+        if (!night) {
+            return sendJson(res, 404, { error: 'No such movie night' })
+        }
+        res.writeHead(200, { 'content-type': 'text/calendar; charset=utf-8', 'content-disposition': 'attachment; filename="movie-night.ics"' })
+        res.end(icsEvent({
+            uid: night.id,
+            start: night.startsAt,
+            title: `Movie night: ${night.title}`,
+            description: `Hosted by ${night.host} on Bloom. Ask them for the link and password.`,
+        }))
+        return
+    }
     if (method === 'GET' && path === '/api/match') {
         // the library's item for a TMDB title, or null: for the host's view of guests' suggestions
-        return sendJson(res, 200, (await jf.byTmdb()).get(`${url.searchParams.get('type') === 'Series' ? 'Series' : 'Movie'}:${url.searchParams.get('tmdb') ?? ''}`) ?? null)
+        return sendJson(res, 200, (await jf.byTmdb(user.id)).get(`${url.searchParams.get('type') === 'Series' ? 'Series' : 'Movie'}:${url.searchParams.get('tmdb') ?? ''}`) ?? null)
     }
     if (method === 'GET' && path === '/api/resume') {
         return sendJson(res, 200, await jf.resume(user.id))
     }
     if (method === 'GET' && path === '/api/children') {
-        return sendJson(res, 200, await jf.children(url.searchParams.get('id') ?? ''))
+        return sendJson(res, 200, await jf.children(url.searchParams.get('id') ?? '', user.id))
     }
 
     return sendJson(res, 404, { error: 'Not found' })
@@ -604,10 +636,42 @@ async function subtitles(req: IncomingMessage, res: ServerResponse, room: Room, 
     return sendJson(res, 504, { error: 'Downloaded, but Jellyfin hasn’t added it yet; try again in a minute' })
 }
 
-/** TMDB's trending and popular lists, narrowed to what the library has, movies and shows interleaved. */
-async function discover(): Promise<{ enabled: true; shelves: Array<{ title: string; items: Card[] }> }> {
+/** A night's public id: stable per room, but never its address. */
+const nightId = (room: Room) => createHmac('sha256', SECRET).update(`night:${room.id}`).digest('hex').slice(0, 24)
 
-    const library = await jf.byTmdb()
+type Night = { id: string; room: string; host: string; startsAt: number; title: string; itemId: string | null; viewers: number; mine: boolean; link: string | null }
+
+/**
+ * Scheduled rooms, soonest first, as one signed-in user may see them: what's on only when their own libraries have it,
+ * and a link only to their own room (others need the host's invite and password, as always).
+ */
+async function upcomingNights(user: Account): Promise<Night[]> {
+
+    const now = Date.now()
+    const scheduled = [...rooms.values()].filter(r => r.startsAt !== null && r.startsAt > now - 3600_000).sort((a, b) => a.startsAt! - b.startsAt!)
+    const visible = await jf.visible(scheduled.flatMap(r => r.queue[r.index] ? [r.queue[r.index].id] : []), user.id).catch(() => new Set<string>())
+
+    return scheduled.map((r) => {
+        const item = r.queue[r.index]
+        const shown = item && visible.has(item.id) ? item : null
+        return {
+            id: nightId(r),
+            room: r.name,
+            host: accounts.find(a => a.id === r.owner)?.name ?? '',
+            startsAt: r.startsAt!,
+            title: shown?.name ?? (item ? 'Something from the host’s library' : 'To be decided'),
+            itemId: shown?.id ?? null,
+            viewers: viewersOf(r).length,
+            mine: isOwner(user, r),
+            link: isOwner(user, r) ? `/?room=${r.id}` : null,
+        }
+    })
+}
+
+/** TMDB's trending and popular lists, narrowed to what the user's libraries have, movies and shows interleaved. */
+async function discover(userId: string): Promise<{ enabled: true; shelves: Array<{ title: string; items: Card[] }> }> {
+
+    const library = await jf.byTmdb(userId)
     const matched = async (list: (type: TmdbType) => Promise<string[]>) => {
         const [movies, shows] = await Promise.all([list('movie').catch(() => []), list('tv').catch(() => [])])
         const items: Card[] = []
@@ -640,18 +704,11 @@ const server = createServer((req, res) => {
 async function endRoom(room: Room): Promise<void> {
 
     saveProgress(room, true)
-    saveWatched(room.id)
-    forgetRoom(room.id)
     rooms.delete(room.id)
-    emptySince.delete(room.id)
-    locks.delete(room.id)
-    invites.delete(room.id)
-    logs.delete(room.id)
-    chats.delete(room.id)
     for (const client of clients.get(room.id) ?? []) {
         client.ws.close(4404, 'Room ended')
     }
-    clients.delete(room.id)
+    forgetRoom(room.id)
     await stopRoomStreams(room, jf)
 }
 
@@ -684,16 +741,16 @@ server.on('upgrade', (req, socket, head) => {
             socket.destroy()
             return
         }
-        wss.handleUpgrade(req, socket, head, ws => onJoin(ws, room, isOwner(users.fromRequest(req), room)))
+        wss.handleUpgrade(req, socket, head, ws => onJoin(ws, room, isOwner(users.fromRequest(req), room), locks.get(room.id)?.auth.tokenOf(req) ?? null))
     } catch (err) {
         console.error('Upgrade failed:', (err as Error).message)
         socket.destroy()
     }
 })
 
-function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
+function onJoin(ws: WebSocket, room: Room, isHost: boolean, token: string | null): void {
 
-    const client: Client = { id: randomBytes(8).toString('base64url'), lastReaction: 0, lastChat: 0, ws, name: 'Guest', isHost, observer: false, windowStart: 0, count: 0, strikes: 0, bufferingSince: 0, speed: 0 }
+    const client: Client = { id: randomBytes(8).toString('base64url'), token, lastReaction: 0, lastChat: 0, ws, name: 'Guest', isHost, observer: false, windowStart: 0, count: 0, strikes: 0, bufferingSince: 0, lastBufferStart: 0, lastBufferEnd: 0, speed: 0 }
     const set = clients.get(room.id) ?? new Set<Client>()
     clients.set(room.id, set)
     set.add(client)
@@ -781,7 +838,14 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
             if (buffering === client.bufferingSince > 0) {
                 return
             }
-            client.bufferingSince = buffering ? now : 0
+            if (buffering) {
+                // buffering again within moments continues the same wait, so toggling can't hold the room past MAX_WAIT_MS
+                client.bufferingSince = now - client.lastBufferEnd < BUFFER_RESUME_MS ? client.lastBufferStart : now
+                client.lastBufferStart = client.bufferingSince
+            } else {
+                client.bufferingSince = 0
+                client.lastBufferEnd = now
+            }
             updateWaiting(room, now)
             if (room.waiting) {
                 broadcast(room) // waitingFor changed
@@ -817,8 +881,11 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
                 return
             }
             {
-                const first = room.queue.length
-                const items = await jf.queueItems(String(msg.itemId))
+                const items = await jf.queueItems(String(msg.itemId), room.owner) // only what the host may see
+                if (gone(room)) {
+                    return
+                }
+                const first = room.queue.length // after the await: something else may have been queued meanwhile
                 if (items.length) {
                     logAction(room, client, msg.playNow === true ? `started ${items[0].name}` : describe(room, { type: 'queueAdd', items }))
                 }
@@ -826,7 +893,7 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
                     apply(room, { type: 'jump', index: first }, true, Date.now()) // "Watch now": start what was just added
                     // a movie or episode the host is partway through picks up where they left off
                     const resumeAt = items.length === 1 ? await jf.resumePosition(room.owner, items[0].id).catch(() => 0) : 0
-                    if (resumeAt > 0 && room.queue[room.index] === items[0]) {
+                    if (resumeAt > 0 && !gone(room) && room.queue[room.index] === items[0]) {
                         apply(room, { type: 'seek', position: resumeAt }, true, Date.now())
                     }
                 }
@@ -861,6 +928,9 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
             }
             client.lastChat = now
             const found = await tmdb.title(type === 'Series' ? 'tv' : 'movie', tmdbId)
+            if (gone(room) || room.suggestions.some(s => s.tmdbId === tmdbId)) {
+                return // ended, or someone suggested it during the lookup
+            }
             room.suggestions.push({ tmdbId, type, name: found.name, by: client.name })
             room.suggestions.splice(0, room.suggestions.length - MAX_SUGGESTIONS)
             postChat(room, { at: now, name: client.name, text: `💡 suggested ${found.name}`, gif: null, itemId: null, position: null })
@@ -877,8 +947,11 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
                 return
             }
             const ids = Array.isArray(msg.itemIds) ? [...new Set(msg.itemIds.map(String))].filter(id => ITEM_ID.test(id)).slice(0, 4) : []
-            const found = await Promise.all(ids.map(id => jf.details(id).catch(() => null)))
+            const found = await Promise.all(ids.map(id => jf.details(id, room.owner).catch(() => null)))
             const options = found.filter(d => d !== null).map(d => ({ id: d.id, name: d.name }))
+            if (gone(room)) {
+                return
+            }
             if (options.length < 2) {
                 throw new Error('A vote needs at least two titles')
             }
@@ -986,11 +1059,13 @@ const MAX_WATCHLIST = 500
 async function watchlistApi(req: IncomingMessage, res: ServerResponse, user: Account, method: string, path: string): Promise<void> {
 
     if (method === 'GET' && path === '/api/watchlist') {
-        return sendJson(res, 200, watchlist.toReversed())
+        // shared, but each user only sees what their own libraries hold
+        const visible = await jf.visible(watchlist.map(e => e.id), user.id)
+        return sendJson(res, 200, watchlist.filter(e => visible.has(e.id)).toReversed())
     }
     if (method === 'POST' && path === '/api/watchlist') {
         const id = String((await readJson(req)).id ?? '')
-        const details = ITEM_ID.test(id) && !watchlist.some(e => e.id === id) ? await jf.details(id) : null
+        const details = ITEM_ID.test(id) && !watchlist.some(e => e.id === id) ? await jf.details(id, user.id) : null
         if (details) {
             const { id: itemId, name, type, title, subtitle, rating } = details
             watchlist.push({ id: itemId, name, type, title, subtitle, rating, addedBy: user.name, at: Date.now() })
@@ -1002,7 +1077,8 @@ async function watchlistApi(req: IncomingMessage, res: ServerResponse, user: Acc
     const entry = /^\/api\/watchlist\/([\w-]+)$/.exec(path)
     if (method === 'DELETE' && entry) {
         const index = watchlist.findIndex(e => e.id === entry[1])
-        if (index >= 0) {
+        // only what this user can see, i.e. what their own watchlist shows
+        if (index >= 0 && (await jf.visible([entry[1]], user.id)).has(entry[1])) {
             watchlist.splice(index, 1)
             saveJson(WATCHLIST_FILE, watchlist)
         }
@@ -1011,6 +1087,9 @@ async function watchlistApi(req: IncomingMessage, res: ServerResponse, user: Acc
 
     return sendJson(res, 404, { error: 'Not found' })
 }
+
+/** The room ended while a handler awaited Jellyfin or TMDB: nothing may be written for it any more. */
+const gone = (room: Room) => rooms.get(room.id) !== room
 
 /** Closes the room's vote: the winner plays next, or right away when nothing is on. */
 async function finishVote(room: Room): Promise<void> {
@@ -1021,7 +1100,7 @@ async function finishVote(room: Room): Promise<void> {
     }
     room.vote = null // before the await: a second finish must not queue the winner twice
     const winner = vote.options[voteWinner(vote)]
-    playNext(room, await jf.queueItems(winner.id).catch(() => []), Date.now())
+    playNext(room, await jf.queueItems(winner.id, room.owner).catch(() => []), Date.now())
     updateWaiting(room)
     broadcast(room)
 }
@@ -1070,7 +1149,7 @@ function continueShow(room: Room): void {
         return
     }
     continued.add(key)
-    jf.nextEpisode(item.id).then((next) => {
+    jf.nextEpisode(item.id, room.owner).then((next) => {
         if (next && rooms.get(room.id) === room && room.queue.length - 1 === room.index && room.queue[room.index] === item) {
             room.queue.push(next)
             logAction(room, 'Bloom', `queued the next episode, ${next.name}`)
@@ -1083,21 +1162,11 @@ function continueShow(room: Room): void {
 
 const announced = new Map<string, string>() // room id -> item last announced as playing
 
-/** Posts to the Discord webhook; mentions are disabled so a title can't ping @everyone. */
+/** Posts to the server's Discord channel when the room has announcements on, with its current invite link. */
 function announce(room: Room, text: string): void {
-    if (!DISCORD_WEBHOOK_URL || !room.announce) {
-        return
+    if (DISCORD_WEBHOOK_URL && room.announce) {
+        postToDiscord(DISCORD_WEBHOOK_URL, `${text}\nJoin: ${inviteLink(room)}`)
     }
-    fetch(DISCORD_WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ username: 'Bloom', content: `${text}\nJoin: ${inviteLink(room)}`, allowed_mentions: { parse: [] } }),
-        signal: AbortSignal.timeout(8000),
-    }).then((res) => {
-        if (!res.ok) {
-            console.error(`Discord webhook: ${res.status}`)
-        }
-    }, err => console.error('Discord webhook failed:', err.message))
 }
 
 function announceRoom(room: Room): void {
@@ -1167,7 +1236,7 @@ function loadRooms(): void {
         // defaults first: a room saved by an older version gets newer fields
         const room = { ...createRoom(stored.id, now, stored.owner, stored.name), ...stored, vote: null, waiting: false, suggestions: (stored.suggestions ?? []).filter(s => s.tmdbId) }
         // pick up where it was when saved, not where the clock ran on to while the server was down
-        room.position = Math.min(currentPosition(room, saved.savedAt), room.queue[room.index]?.runtime || Infinity)
+        room.position = Math.min(currentPosition(stored, saved.savedAt), room.queue[room.index]?.runtime || Infinity) // stored: held rooms didn't move
         room.updatedAt = now
         rooms.set(room.id, room)
         emptySince.set(room.id, now) // the usual 5 minutes for its viewers to reconnect
@@ -1187,12 +1256,19 @@ setInterval(saveRooms, 5000)
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.on(signal, () => {
         saveRooms(true)
+        for (const id of rooms.keys()) {
+            saveWatched(id) // what's been watched so far, not lost to a redeploy
+        }
         process.exit(0)
     })
 }
 
-/** Drops a deleted room's once-per-item markers. */
+/** Drops everything kept about a room that ended or expired; its watch time is saved first. */
 function forgetRoom(roomId: string): void {
+    saveWatched(roomId)
+    for (const map of [emptySince, locks, invites, logs, chats, progress, unwatchedSince, announced, clients] as Array<Map<string, unknown>>) {
+        map.delete(roomId)
+    }
     for (const set of [continued, skipped]) {
         for (const key of set) {
             if (key.startsWith(`${roomId}:`)) {
@@ -1248,16 +1324,7 @@ setInterval(() => {
         announceNowPlaying(room)
     }
     for (const id of deleted) {
-        saveWatched(id)
-        forgetRoom(id)
-        unwatchedSince.delete(id)
-        announced.delete(id)
-        clients.delete(id)
-        locks.delete(id)
-        invites.delete(id)
-        logs.delete(id)
-        chats.delete(id)
-        progress.delete(id) // empty for 5 minutes: the host's progress was saved while they were there
+        forgetRoom(id) // empty for 5 minutes: the host's progress was saved while they were there
     }
 }, 1000)
 
