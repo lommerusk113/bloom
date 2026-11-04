@@ -1,4 +1,5 @@
 import type { QueueItem } from './room.ts'
+import type { Account } from './users.ts'
 
 export const TICKS_PER_SECOND = 10_000_000
 
@@ -164,6 +165,37 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
             return (item?.MediaStreams ?? []).filter(s => s.Type === 'Subtitle').map(s => s.Index)
         },
 
+        /** Checks a Jellyfin username and password; the Jellyfin session it opens is closed again right away. */
+        async authenticate(name: string, password: string): Promise<Account | null> {
+            const res = await fetch(`${baseUrl}/Users/AuthenticateByName`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json', Authorization: 'MediaBrowser Client="Bloom", Device="Bloom", DeviceId="bloom-login", Version="1.0"' },
+                body: JSON.stringify({ Username: name, Pw: password }),
+                signal: AbortSignal.timeout(10_000),
+            })
+            if (!res.ok) {
+                return null
+            }
+            const { User, AccessToken } = await res.json() as { User: JfUser; AccessToken: string }
+            fetch(`${baseUrl}/Sessions/Logout`, { method: 'POST', headers: { Authorization: `MediaBrowser Token="${AccessToken}"` } }).catch(() => {})
+            return User.Policy?.IsDisabled ? null : account(User)
+        },
+
+        /** Jellyfin's enabled users. */
+        async accounts(): Promise<Account[]> {
+            return (await json<JfUser[]>('/Users')).filter(u => !u.Policy?.IsDisabled).map(account)
+        },
+
+        /** Saves how far a user got in an item, the way Jellyfin's own players leave it. */
+        async saveProgress(userId: string, itemId: string, position: number, runtime: number): Promise<void> {
+            const data = userData(position, runtime)
+            if (data) {
+                await json(`/UserItems/${encodeURIComponent(itemId)}/UserData?${new URLSearchParams({ userId })}`, {
+                    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...data, LastPlayedDate: new Date().toISOString() }),
+                })
+            }
+        },
+
         /** Intro, recap, credits and preview ranges in seconds; empty without a segment plugin such as Intro Skipper. */
         async segments(itemId: string): Promise<Segment[]> {
             const res = await json<{ Items: Array<{ Type: string; StartTicks: number; EndTicks: number }> }>(`/MediaSegments/${encodeURIComponent(itemId)}`)
@@ -193,6 +225,17 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
 }
 
 const PAGE = 60
+type JfUser = { Id: string; Name: string; Policy?: { IsAdministrator?: boolean; IsDisabled?: boolean } }
+const account = (u: JfUser): Account => ({ id: u.Id, name: u.Name, admin: u.Policy?.IsAdministrator === true })
+
+/** Jellyfin's default resume rules: under 5% isn't progress, past 90% counts as watched. */
+export function userData(position: number, runtime: number): { PlaybackPositionTicks: number; Played?: true } | null {
+    const pct = runtime > 0 ? position / runtime : 0
+    if (pct < 0.05) {
+        return null
+    }
+    return pct > 0.9 ? { PlaybackPositionTicks: 0, Played: true } : { PlaybackPositionTicks: Math.round(position * TICKS_PER_SECOND) } // rewatching keeps "watched"
+}
 const SKIPPABLE = new Set(['Intro', 'Recap', 'Outro', 'Preview'])
 const PLAYABLE = new Set(['Movie', 'Episode', 'Series', 'Season'])
 const INDEX_TTL_MS = 10 * 60_000

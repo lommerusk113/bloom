@@ -1,6 +1,6 @@
 import { connectRoom } from './ws.js'
 import { adaptLead, decide, joinLead, nextBackoff, targetPosition } from './sync.js'
-import { cleanVtt, deviceProfile, playbackInfo, proxied, stopStream, subtitlePath } from './playback.js'
+import { cleanVtt, deviceProfile, MAX_BITRATE, ORIGINAL_BITRATE, playbackInfo, proxied, stopStream, subtitlePath } from './playback.js'
 import { setupCast } from './cast.js'
 
 const $ = (id) => document.getElementById(id)
@@ -29,7 +29,7 @@ let loadedOnce = false
 let catchUp = null    // { at, lead }: loading ahead of the room alone; starts playing when the room reaches `at`
 let speedMbps = null  // measured download speed from the server
 let speedTest = Promise.resolve()
-let autoCap = null    // bps ceiling for Auto, lowered each time playback keeps stalling
+let autoLimit = Infinity // bps ceiling for Auto, lowered a tier each time playback keeps stalling
 let stalls = []       // times playback froze mid-stream, for lowering Auto
 let lastTime = -1     // currentTime at the previous sync tick
 let wasFrozen = false
@@ -211,14 +211,15 @@ async function load(itemId, solo = false) {
         current = { itemId, source }
         const room = state?.room
         if (solo && room?.playing && !room.waiting && !cast?.active()) {
-            const lead = joinLead(Math.min(source.Bitrate || 8e6, bitrate() ?? Infinity), (speedMbps ?? 10) * 1e6)
+            const lead = joinLead(Math.min(source.Bitrate || 8e6, bitrate()), (speedMbps ?? 10) * 1e6)
             catchUp = { at: currentTarget() + lead, lead }
         }
         prefs.audio ??= source.DefaultAudioStreamIndex ?? null
         prefs.subs ??= source.DefaultSubtitleStreamIndex ?? -1
-        attach(proxied(roomId, source.TranscodingUrl))
+        attach(proxied(roomId, source.TranscodingUrl + (maxHeight() ? `&MaxHeight=${maxHeight()}` : '')))
         showSubtitles()
         fillPickers()
+        offerOriginal()
         $('status').textContent = ''
     } catch (err) {
         if (token === loadToken) {
@@ -362,9 +363,12 @@ $('subs').onchange = () => {
     }
 }
 $('quality').value = recall('wp_quality') ?? 'auto'
+if (!$('quality').value) {
+    $('quality').value = 'auto' // a choice from an older list
+}
 $('quality').onchange = () => {
     store('wp_quality', $('quality').value)
-    autoCap = null
+    autoLimit = Infinity
     if (current) {
         reloadAlone()
     }
@@ -376,19 +380,52 @@ function reloadAlone() {
     load(current.itemId, true)
 }
 
+/** The fixed qualities, best first, as "bitrate:height". */
+const TIERS = [...$('quality').options].map(o => o.value).filter(v => /^\d+:\d+$/.test(v))
+const tierBitrate = (tier) => Number(tier.split(':')[0])
+
 /**
- * Max bitrate to ask Jellyfin for: the picked quality, or for Auto half the measured speed (Wi-Fi swings well below
- * a speed test), lowered further after repeated stalls. null: the original.
+ * Auto: the best tier within half the measured speed (Wi-Fi swings well below a speed test) and below autoLimit.
+ * Snapping to tiers keeps viewers on the same few streams.
  */
-function bitrate() {
+function autoTier() {
+    const budget = Math.min(speedMbps === null ? MAX_BITRATE : speedMbps * 500_000, autoLimit)
+    return TIERS.find(t => tierBitrate(t) <= budget) ?? TIERS.at(-1)
+}
+
+/** The stream this viewer gets: "original" or a tier. */
+function quality() {
     const picked = $('quality').value
-    if (picked !== 'auto') {
-        return Number(picked) || null
+    if (picked === 'original') {
+        return speedMbps !== null && fastEnough(current?.source ?? current?.last) ? 'original' : autoTier() // a new item is tried as is
     }
-    // Jellyfin takes an int32: a fast LAN would overflow it
-    const measured = speedMbps === null ? Infinity : Math.max(1_500_000, Math.round(speedMbps * 500_000))
-    const cap = Math.min(measured, autoCap ?? Infinity, 120_000_000)
-    return cap === Infinity ? null : cap
+    return picked === 'auto' ? autoTier() : picked
+}
+
+/** Max bitrate to ask Jellyfin for. */
+const bitrate = () => (quality() === 'original' ? ORIGINAL_BITRATE : tierBitrate(quality()))
+
+/** The quality's resolution, e.g. 720; null for the original. */
+const maxHeight = () => Number(quality().split(':')[1]) || null
+
+/** Whether the viewer's connection carries the item's original file, with the same headroom Auto keeps. Unknown item: yes. */
+function fastEnough(source) {
+    return !source?.Bitrate || (speedMbps !== null && speedMbps * 500_000 >= source.Bitrate)
+}
+
+/** Original is only offered when the connection can carry it; shows what it needs otherwise. */
+function offerOriginal() {
+    const source = current?.source ?? current?.last
+    const ok = speedMbps !== null && fastEnough(source)
+    $('original').disabled = !ok
+    $('original').textContent = ok || !source?.Bitrate ? 'Original file (best quality)'
+        : `Original file (best quality) – needs ${Math.ceil(source.Bitrate / 500_000)} Mbps`
+    if (!ok && $('quality').value === 'original') {
+        $('quality').value = 'auto'
+        if (current?.source && current.source.Bitrate > bitrate()) {
+            load(current.itemId, true) // this item's file is too big for the connection
+        }
+    }
 }
 
 /** Times a download from the server for up to 5s; reports the speed to the room for the admin dashboard. */
@@ -408,9 +445,11 @@ async function measureSpeed() {
         reader.cancel().catch(() => {})
         speedMbps = Math.round((bytes * 8) / ((performance.now() - started) / 1000) / 100_000) / 10
         socket.send({ type: 'speed', value: speedMbps })
-        $('speed').textContent = `Your connection: ${speedMbps} Mbps`
+        $('speed').textContent = `Your connection: ${speedMbps} Mbps · Auto picks ${$('quality').querySelector(`option[value="${autoTier()}"]`).textContent}`
+        offerOriginal()
     } catch {
-        $('speed').textContent = '' // unknown speed: Auto plays the original
+        $('speed').textContent = '' // unknown speed: Auto plays MAX_BITRATE
+        offerOriginal()
     }
 }
 
@@ -596,13 +635,18 @@ function render() {
 function noteStall() {
     const now = Date.now()
     stalls = [...stalls.filter(at => now - at < 60_000), now]
-    if (stalls.length < 3 || $('quality').value !== 'auto' || !current?.source) {
+    if (stalls.length < 3 || !['auto', 'original'].includes($('quality').value) || !current?.source) {
         return
     }
     stalls = []
-    const playedAt = Math.min(bitrate() ?? Infinity, current.source.Bitrate || 8_000_000)
-    autoCap = Math.max(1_000_000, Math.round(playedAt * 0.6))
-    $('speed').textContent = `Playback kept stalling: Auto lowered to ${(autoCap / 1e6).toFixed(1)} Mbps`
+    const playedAt = Math.min(bitrate(), current.source.Bitrate || MAX_BITRATE)
+    $('quality').value = 'auto' // the original file didn't keep up either
+    const lower = TIERS.find(t => tierBitrate(t) < playedAt)
+    if (!lower) {
+        return // already the lowest
+    }
+    autoLimit = tierBitrate(lower)
+    $('speed').textContent = `Playback kept stalling: Auto lowered to ${$('quality').querySelector(`option[value="${lower}"]`).textContent}`
     load(current.itemId, true)
 }
 

@@ -12,8 +12,6 @@ async function api(path, init) {
     return body
 }
 
-const send = (method, path, data) => api(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(data ?? {}) })
-
 function el(tag, className, text) {
     const node = document.createElement(tag)
     if (className) {
@@ -104,30 +102,12 @@ function render({ server, rooms, users }) {
         )
     }))
 
-    $('users').replaceChildren(...users.map((u) => {
-        const patch = (change) => send('PATCH', `/api/admin/users/${u.id}`, change)
-        const actions = el('div', 'row')
-        actions.append(
-            button(u.admin ? 'Remove admin' : 'Make admin', () => patch({ admin: !u.admin })),
-            button(u.disabled ? 'Enable' : 'Disable', () => patch({ disabled: !u.disabled })),
-            button('Reset password', async () => {
-                const password = prompt(`New password for ${u.name} (6+ characters)`)
-                if (password) {
-                    await patch({ password })
-                }
-            }),
-            button('Delete', () => confirm(`Delete ${u.name}? Their rooms end too.`) && send('DELETE', `/api/admin/users/${u.id}`), 'danger'),
-        )
-        return row(
-            el('strong', '', u.name),
-            u.admin ? tag('admin', 'on') : tag('user'),
-            u.disabled ? tag('disabled', 'off') : tag('active'),
-            String(u.rooms),
-            ago(u.lastLogin, server.now),
-            new Date(u.createdAt).toLocaleDateString(),
-            actions,
-        )
-    }))
+    $('users').replaceChildren(...users.map(u => row(
+        el('strong', '', u.name),
+        u.admin ? tag('admin', 'on') : tag('user'),
+        String(u.rooms),
+        ago(u.lastLogin, server.now),
+    )))
 }
 
 async function refresh() {
@@ -136,18 +116,6 @@ async function refresh() {
         showError('')
     } catch (err) {
         showError(err.message)
-    }
-}
-
-$('create').onsubmit = async (event) => {
-    event.preventDefault()
-    try {
-        const user = await send('POST', '/api/admin/users', { name: $('newName').value.trim(), password: $('newPassword').value, admin: $('newAdmin').checked })
-        $('create').reset()
-        $('createNote').textContent = `Created ${user.name}. They log in at ${location.origin}`
-        await refresh()
-    } catch (err) {
-        $('createNote').textContent = err.message
     }
 }
 

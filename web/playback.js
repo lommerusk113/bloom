@@ -2,6 +2,11 @@
 
 export const proxied = (roomId, path) => `/r/${roomId}/jf${path}`
 
+/** The most a converted stream may use: keeps the server's upload and every viewer's line comfortable. */
+export const MAX_BITRATE = 10_000_000
+/** Asks for the file as it is; Jellyfin takes an int32, so not more. */
+export const ORIGINAL_BITRATE = 120_000_000
+
 export const subtitlePath = (itemId, sourceId, index) => `/Videos/${itemId}/${sourceId}/Subtitles/${index}/0/Stream.vtt`
 
 /**
@@ -57,7 +62,7 @@ export function deviceProfile(video, safe = false) {
     }
     const textSubs = ['vtt', 'webvtt', 'srt', 'subrip', 'ass', 'ssa', 'mov_text'].map(Format => ({ Format, Method: 'External' }))
     return {
-        MaxStreamingBitrate: 120_000_000,
+        MaxStreamingBitrate: ORIGINAL_BITRATE, // the PlaybackInfo query sets the real cap
         DirectPlayProfiles: [],
         TranscodingProfiles: [{
             Type: 'Video',
@@ -84,7 +89,7 @@ export function deviceProfile(video, safe = false) {
 export async function playbackInfo(roomId, itemId, profile, { deviceId, audio = null, subs = null, bitrate = null, mediaSourceId = null }) {
     const query = new URLSearchParams({
         DeviceId: deviceId,
-        MaxStreamingBitrate: String(bitrate ?? 120_000_000),
+        MaxStreamingBitrate: String(bitrate ?? MAX_BITRATE),
         EnableDirectPlay: 'false',
         EnableDirectStream: 'false',
         EnableTranscoding: 'true',

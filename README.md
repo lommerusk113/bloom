@@ -29,15 +29,14 @@ Bloom never encodes video itself. Every guest gets an HLS stream from Jellyfin (
    Nginx needs `proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`.
 
    The example compose file publishes port 8080 on `127.0.0.1` only, so it is reachable from a reverse proxy on the same host (`localhost:8080`) or on the same Docker network (`bloom:8080`), never directly from outside.
-   The container runs read-only with all capabilities dropped; only accounts are written, to the `bloom-data` volume (`/data/users.json`). Rooms live in memory.
+   The container runs read-only with all capabilities dropped; only login sessions are written, to the `bloom-data` volume (`/data/sessions.json`). Rooms live in memory.
 
 | Env var | Required | Meaning |
 |---|---|---|
 | `JELLYFIN_URL` | yes | Internal Jellyfin URL, e.g. `http://jellyfin:8096` |
 | `JELLYFIN_API_KEY` | yes | API key from step 1 |
 | `JELLYFIN_USER_ID` | no | Run as this Jellyfin user (default: the first administrator); limits libraries to that user's |
-| `ADMIN_PASSWORD` | first start | Password (6+ characters) for the first admin account, username `admin` (`ADMIN_USERNAME` changes it). Only used while no accounts exist; change it afterwards from the account menu |
-| `DATA_DIR` | no | Where accounts are stored; `/data` in Docker, `./data` otherwise |
+| `DATA_DIR` | no | Where login sessions are stored; `/data` in Docker, `./data` otherwise |
 | `PUBLIC_URL` | behind a reverse proxy | External URL; its host is accepted as the websocket Origin and `https://` enables the Secure cookie flag |
 | `TMDB_API_KEY` | no | Free key from themoviedb.org (Settings → API); adds “Trending this week” and “Popular right now” rows for titles in your library |
 | `PORT` | no | Default `8080` |
@@ -45,7 +44,7 @@ Bloom never encodes video itself. Every guest gets an HLS stream from Jellyfin (
 ## Deploy with Coolify
 
 1. **New resource → Public/Private repository** → this repo, build pack **Docker Compose**, compose file `docker-compose.yml`.
-2. Under **Environment Variables**, fill in `JELLYFIN_URL`, `JELLYFIN_API_KEY` and `ADMIN_PASSWORD` (required), and optionally `TMDB_API_KEY` and `JELLYFIN_USER_ID`.
+2. Under **Environment Variables**, fill in `JELLYFIN_URL` and `JELLYFIN_API_KEY` (required), and optionally `TMDB_API_KEY` and `JELLYFIN_USER_ID`.
 3. Set the domain for the `bloom` service (Coolify fills `SERVICE_FQDN_BLOOM_8080`, which also becomes `PUBLIC_URL`) and deploy.
 
 Behind **Pangolin** (or another proxy outside Coolify) skip the Coolify domain: set `PUBLIC_URL` to the public address and point the proxy at `http://<server-ip>:8765` (`HOST_PORT` changes 8765). In Pangolin turn off authentication for the resource, or guests get a Pangolin login instead of Bloom.
@@ -54,7 +53,7 @@ Behind **Pangolin** (or another proxy outside Coolify) skip the Coolify domain: 
 
 ## Using it
 
-1. Log in as `admin` and open **Admin** to create accounts for the people who should be able to host. The dashboard also shows every open room with who is watching and their connection speed, active streams and Jellyfin's status, and lets you end rooms, disable, reset or delete accounts.
+1. Log in with your Jellyfin username and password. Any enabled Jellyfin user can host; users are managed in Jellyfin, and disabling one there logs them out of Bloom and ends their rooms within 30 seconds. The host's watch progress is saved to their Jellyfin account (resume points and watched status); guests' isn't. Jellyfin administrators get **Admin**: every open room with who is watching and their connection speed, active streams, Jellyfin's status and users, and ending rooms.
 2. Open the external URL, log in, create a room, search and add things to the queue. Each user only sees and controls their own rooms.
 3. Share the room link. Guests need no account: they enter a name and watch.
 4. Optionally set a **room password** under Invite; guests then enter it before joining (you never need it).
@@ -75,5 +74,5 @@ Each room allows 24 active streams; a stream that makes no requests for 2 minute
 npm install
 npm test
 npm run check
-JELLYFIN_URL=http://localhost:8096 JELLYFIN_API_KEY=... ADMIN_PASSWORD=change-me npm start
+JELLYFIN_URL=http://localhost:8096 JELLYFIN_API_KEY=... npm start
 ```

@@ -32,18 +32,11 @@
         <h2>Users</h2>
         <div class="table-wrap">
             <table class="table">
-                <thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Rooms</th><th>Last login</th><th>Created</th><th></th></tr></thead>
+                <thead><tr><th>Name</th><th>Role</th><th>Rooms</th><th>Last Bloom login</th></tr></thead>
                 <tbody id="users"></tbody>
             </table>
         </div>
-        <h3>New user</h3>
-        <form id="create" class="row">
-            <input id="newName" placeholder="Username" autocomplete="off" required maxlength="32">
-            <input id="newPassword" type="text" placeholder="Password (6+ characters)" autocomplete="off" required minlength="6">
-            <label class="check"><input id="newAdmin" type="checkbox"> Admin</label>
-            <button class="primary">Create</button>
-        </form>
-        <p id="createNote" class="muted small"></p>
+        <p class="muted small">Jellyfin's enabled users. Add, disable or make admins in Jellyfin's dashboard; Bloom follows within 30 seconds.</p>
     </section>
 </main>
 <script type="module" src="/web/admin.js"></script>

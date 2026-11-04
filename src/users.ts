@@ -1,27 +1,25 @@
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage } from 'node:http'
 import { join } from 'node:path'
 import { createLimiter, digest, MAX_AGE_S, parseCookies, sessionCookie } from './auth.ts'
 
 const COOKIE = 'bloom_session'
-const NAME = /^[\w.@-]{1,32}$/
-const MIN_PASSWORD = 6
 
-type StoredUser = { id: string; name: string; hash: string; admin: boolean; disabled: boolean; createdAt: number; lastLogin: number | null }
-/** What the API shows about a user: never the hash. */
-export type User = Omit<StoredUser, 'hash'>
+/** A Jellyfin user, as far as Bloom cares. */
+export type Account = { id: string; name: string; admin: boolean }
+type Session = Account & { expires: number }
 
 /**
- * Accounts and their login sessions, saved as JSON in dir/users.json.
+ * Login sessions for Jellyfin users, saved as JSON in dir/sessions.json; Jellyfin checks the passwords.
  * Sessions are stored as sha256 of the cookie token, so the file alone can't be used to log in.
  */
-// ponytail: one JSON file rewritten on every change; fine for a household's worth of users
-export function createUsers(dir: string, secure: boolean) {
+// ponytail: one JSON file rewritten on every login; fine for a household's worth of users
+export function createUsers(dir: string, secure: boolean, authenticate: (name: string, password: string) => Promise<Account | null>) {
 
-    const file = join(dir, 'users.json')
+    const file = join(dir, 'sessions.json')
     const limiter = createLimiter()
-    let data: { users: StoredUser[]; sessions: Record<string, { userId: string; expires: number }> } = { users: [], sessions: {} }
+    let data: { sessions: Record<string, Session>; lastLogin: Record<string, number> } = { sessions: {}, lastLogin: {} }
     try {
         data = JSON.parse(readFileSync(file, 'utf8'))
     } catch (err) {
@@ -36,85 +34,17 @@ export function createUsers(dir: string, secure: boolean) {
         renameSync(`${file}.tmp`, file)
     }
 
-    const publicUser = ({ hash: _, ...user }: StoredUser): User => user
-    const byId = (id: string) => data.users.find(u => u.id === id)
-
-    function validate(name: string | undefined, password: string | undefined): void {
-        if (name !== undefined && !NAME.test(name)) {
-            throw new Error('Username: 1–32 letters, digits, . _ @ or -')
-        }
-        if (name !== undefined && data.users.some(u => u.name.toLowerCase() === name.toLowerCase())) {
-            throw new Error('That username is taken')
-        }
-        if (password !== undefined && password.length < MIN_PASSWORD) {
-            throw new Error(`Password: at least ${MIN_PASSWORD} characters`)
-        }
-    }
-
-    function dropSessions(userId: string): void {
-        for (const [key, session] of Object.entries(data.sessions)) {
-            if (session.userId === userId) {
-                delete data.sessions[key]
-            }
-        }
-    }
-
     return {
-        count: () => data.users.length,
+        /** When each Jellyfin user last logged in to Bloom. */
+        lastLogin: (id: string): number | null => data.lastLogin[id] ?? null,
 
-        list: (): User[] => data.users.map(publicUser),
-
-        get: (id: string): User | null => {
-            const user = byId(id)
-            return user ? publicUser(user) : null
-        },
-
-        create(name: string, password: string, admin: boolean, now = Date.now()): User {
-            validate(name, password)
-            const user: StoredUser = { id: randomUUID(), name, hash: hashPassword(password), admin, disabled: false, createdAt: now, lastLogin: null }
-            data.users.push(user)
-            save()
-            return publicUser(user)
-        },
-
-        update(id: string, change: { password?: string; admin?: boolean; disabled?: boolean }): User {
-            const user = byId(id)
-            if (!user) {
-                throw new Error('No such user')
-            }
-            validate(undefined, change.password)
-            if (change.password !== undefined) {
-                user.hash = hashPassword(change.password)
-                dropSessions(id) // a new password logs out every other device
-            }
-            if (change.admin !== undefined) {
-                user.admin = change.admin
-            }
-            if (change.disabled !== undefined) {
-                user.disabled = change.disabled
-                if (change.disabled) {
-                    dropSessions(id)
-                }
-            }
-            save()
-            return publicUser(user)
-        },
-
-        remove(id: string): void {
-            data.users = data.users.filter(u => u.id !== id)
-            dropSessions(id)
-            save()
-        },
-
-        /** A session token, or null for a wrong name/password, a disabled account or a rate limited ip. */
-        login(name: string, password: string, ip: string, now = Date.now()): string | null {
+        /** A session token, or null for a wrong name/password, a disabled Jellyfin user or a rate limited ip. */
+        async login(name: string, password: string, ip: string, now = Date.now()): Promise<string | null> {
             if (limiter.blocked(ip, now)) {
                 return null
             }
-            const user = data.users.find(u => u.name.toLowerCase() === name.trim().toLowerCase())
-            // hash even for unknown names so timing doesn't reveal which names exist
-            const ok = checkPassword(password, user?.hash ?? DUMMY_HASH) && user && !user.disabled
-            if (!ok) {
+            const account = await authenticate(name.trim(), password)
+            if (!account) {
                 limiter.fail(ip, now)
                 return null
             }
@@ -124,18 +54,37 @@ export function createUsers(dir: string, secure: boolean) {
                 }
             }
             const token = randomBytes(32).toString('base64url')
-            data.sessions[tokenKey(token)] = { userId: user.id, expires: now + MAX_AGE_S * 1000 }
-            user.lastLogin = now
+            data.sessions[tokenKey(token)] = { ...account, expires: now + MAX_AGE_S * 1000 }
+            data.lastLogin[account.id] = now
             save()
             return token
         },
 
-        /** The logged-in, enabled user behind the request's cookie. */
-        fromRequest(req: IncomingMessage, now = Date.now()): User | null {
+        /** The logged-in user behind the request's cookie. */
+        fromRequest(req: IncomingMessage, now = Date.now()): Account | null {
             const token = parseCookies(req.headers.cookie).get(COOKIE)
             const session = token ? data.sessions[tokenKey(token)] : undefined
-            const user = session && session.expires > now ? byId(session.userId) : undefined
-            return user && !user.disabled ? publicUser(user) : null
+            return session && session.expires > now ? { id: session.id, name: session.name, admin: session.admin } : null
+        },
+
+        /**
+         * Brings sessions in line with Jellyfin's current users: renames and admin rights follow,
+         * deleted or disabled users are logged out. Returns the ids of users logged out.
+         */
+        refresh(enabled: Account[]): string[] {
+            const byId = new Map(enabled.map(a => [a.id, a]))
+            const dropped = new Set<string>()
+            for (const [key, session] of Object.entries(data.sessions)) {
+                const account = byId.get(session.id)
+                if (account) {
+                    data.sessions[key] = { ...account, expires: session.expires }
+                } else {
+                    dropped.add(session.id)
+                    delete data.sessions[key]
+                }
+            }
+            save()
+            return [...dropped]
         },
 
         logout(req: IncomingMessage): void {
@@ -146,8 +95,6 @@ export function createUsers(dir: string, secure: boolean) {
             }
         },
 
-        checkPassword: (id: string, password: string): boolean => checkPassword(password, byId(id)?.hash ?? DUMMY_HASH),
-
         cookie: (token: string): string => sessionCookie(COOKIE, token, secure),
         clearCookie: (): string => sessionCookie(COOKIE, '', secure, 0),
     }
@@ -156,17 +103,3 @@ export function createUsers(dir: string, secure: boolean) {
 export type Users = ReturnType<typeof createUsers>
 
 const tokenKey = (token: string): string => digest(token).toString('hex')
-
-function hashPassword(password: string): string {
-    const salt = randomBytes(16)
-    return `${salt.toString('hex')}:${scryptSync(password, salt, 32).toString('hex')}`
-}
-
-function checkPassword(password: string, stored: string): boolean {
-    const [salt, hash] = stored.split(':')
-    const expected = Buffer.from(hash ?? '', 'hex')
-    const actual = scryptSync(password, Buffer.from(salt ?? '', 'hex'), 32)
-    return expected.length === actual.length && timingSafeEqual(expected, actual)
-}
-
-const DUMMY_HASH = hashPassword(randomBytes(8).toString('hex'))

@@ -110,16 +110,6 @@ function account(user) {
         await postJson('/api/logout', {}).catch(() => {})
         location.href = '/'
     }
-    $('passwordChange').onsubmit = async (event) => {
-        event.preventDefault()
-        try {
-            await postJson('/api/me/password', { current: $('currentPassword').value, password: $('newPassword').value })
-            $('passwordChange').reset()
-            $('passwordChangeNote').textContent = 'Password changed ✓'
-        } catch (err) {
-            $('passwordChangeNote').textContent = err.message
-        }
-    }
 }
 
 function showPassword(password) {

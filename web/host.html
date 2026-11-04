@@ -15,9 +15,10 @@
         <h1 class="brand-title"><img src="/web/logo.svg" alt=""> Bloom</h1>
         <p class="muted">Watch Jellyfin together. Log in to create a room and pick something.</p>
         <form id="loginForm" class="stack">
-            <input id="username" placeholder="Username" autocomplete="username" required autofocus>
-            <input id="password" type="password" placeholder="Password" autocomplete="current-password" required>
+            <input id="username" placeholder="Jellyfin username" autocomplete="username" required autofocus>
+            <input id="password" type="password" placeholder="Jellyfin password" autocomplete="current-password">
             <button class="primary">Log in</button>
+            <p class="muted small">Use your Jellyfin account.</p>
         </form>
         <p id="loginError" class="error"></p>
     </section>
@@ -30,13 +31,6 @@
                 <details class="menu">
                     <summary id="account" aria-label="Account"></summary>
                     <div class="menu-panel">
-                        <form id="passwordChange" class="stack">
-                            <strong>Change password</strong>
-                            <input id="currentPassword" type="password" placeholder="Current password" autocomplete="current-password" required>
-                            <input id="newPassword" type="password" placeholder="New password (6+ characters)" autocomplete="new-password" minlength="6" required>
-                            <button class="primary">Change</button>
-                            <p id="passwordChangeNote" class="muted small"></p>
-                        </form>
                         <button id="logout">Log out</button>
                     </div>
                 </details>

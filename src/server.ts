@@ -4,11 +4,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join } from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createAuth } from './auth.ts'
-import { createUsers, type User } from './users.ts'
+import { createUsers, type Account } from './users.ts'
 import { createJellyfin, type Card } from './jellyfin.ts'
 import { createTmdb, type TmdbType } from './tmdb.ts'
 import { activeStreams, proxyRequest, readBody, stopRoomStreams } from './proxy.ts'
-import { apply, createRoom, parseCommand, setWaiting, sweepRooms, type Room } from './room.ts'
+import { apply, createRoom, currentPosition, parseCommand, setWaiting, sweepRooms, type Room } from './room.ts'
 
 /**
  * windowStart/count/strikes: websocket rate limit state, see overLimit. bufferingSince: 0 unless the client's player is loading.
@@ -41,7 +41,7 @@ const PUBLIC_URL = withScheme(process.env.PUBLIC_URL || `http://localhost:${PORT
 const PUBLIC_HOST = new URL(PUBLIC_URL).host
 const jf = createJellyfin(required('JELLYFIN_URL').replace(/\/$/, ''), required('JELLYFIN_API_KEY'), process.env.JELLYFIN_USER_ID || undefined)
 const SECURE = PUBLIC_URL.startsWith('https:')
-const users = createUsers(process.env.DATA_DIR || join(import.meta.dirname, '..', 'data'), SECURE)
+const users = createUsers(process.env.DATA_DIR || join(import.meta.dirname, '..', 'data'), SECURE, (name, password) => jf.authenticate(name, password))
 const STARTED_AT = Date.now()
 /** Random bytes viewers download to measure their speed; random so no proxy can compress them. */
 const SPEED_TEST = randomBytes(4_000_000)
@@ -58,16 +58,9 @@ const pendingBroadcasts = new Set<Room>()
 let flushTimer: NodeJS.Timeout | undefined
 let jellyfinError: string | null = 'Not checked yet'
 let jellyfinInfo: { ServerName: string; Version: string } | null = null
-
-if (users.count() === 0) {
-    // first start: the admin account everyone else is created from
-    const password = process.env.ADMIN_PASSWORD || process.env.HOST_PASSWORD
-    if (!password) {
-        throw new Error('Set ADMIN_PASSWORD: the first admin account (username "admin") is created with it')
-    }
-    const admin = users.create(process.env.ADMIN_USERNAME || 'admin', password, true)
-    console.log(`Created admin account "${admin.name}"`)
-}
+let accounts: Account[] = [] // Jellyfin's enabled users
+/** Per room: the host's item and position last saved to Jellyfin. */
+const progress = new Map<string, { itemId: string; position: number; runtime: number }>()
 
 function withScheme(url: string): string {
     return /^https?:\/\//.test(url) ? url : `https://${url}`
@@ -169,19 +162,19 @@ function mayJoin(req: IncomingMessage, room: Room): boolean {
     return !lock || isOwner(users.fromRequest(req), room) || lock.auth.isLoggedIn(req)
 }
 
-const isOwner = (user: User | null, room: Room): boolean => user !== null && user.id === room.owner
+const isOwner = (user: Account | null, room: Room): boolean => user !== null && user.id === room.owner
 
 /** Everything the admin dashboard shows. */
 function overview() {
     const now = Date.now()
-    const names = new Map(users.list().map(u => [u.id, u.name]))
+    const names = new Map(accounts.map(u => [u.id, u.name]))
     return {
         server: { startedAt: STARTED_AT, now, jellyfin: { error: jellyfinError, name: jellyfinInfo?.ServerName ?? '', version: jellyfinInfo?.Version ?? '' }, tmdb: tmdb !== null },
-        users: users.list().map(u => ({ ...u, rooms: [...rooms.values()].filter(r => r.owner === u.id).length })),
+        users: accounts.map(u => ({ ...u, lastLogin: users.lastLogin(u.id), rooms: [...rooms.values()].filter(r => r.owner === u.id).length })),
         rooms: [...rooms.values()].map(room => ({
             id: room.id,
             name: room.name,
-            owner: names.get(room.owner) ?? '(deleted user)',
+            owner: names.get(room.owner) ?? '(unknown user)',
             playing: room.queue[room.index]?.name ?? '',
             state: !room.queue[room.index] ? 'idle' : room.waiting ? 'loading' : room.playing ? 'playing' : 'paused',
             password: locks.has(room.id),
@@ -191,7 +184,7 @@ function overview() {
     }
 }
 
-/** Ends the user's rooms, e.g. when the account is disabled or deleted. */
+/** Ends the user's rooms, e.g. when they are disabled or deleted in Jellyfin. */
 async function endRoomsOf(userId: string): Promise<void> {
     await Promise.all([...rooms.values()].filter(r => r.owner === userId).map(endRoom))
 }
@@ -294,9 +287,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
     if (method === 'POST' && path === '/api/login') {
         const body = await readJson(req)
-        const token = users.login(String(body.username ?? ''), String(body.password ?? ''), req.socket.remoteAddress ?? '')
+        const token = await users.login(String(body.username ?? ''), String(body.password ?? ''), req.socket.remoteAddress ?? '').catch(() => null)
         if (!token) {
-            return sendJson(res, 401, { error: 'Wrong username or password, or too many attempts' })
+            return sendJson(res, 401, { error: 'Wrong Jellyfin username or password, or too many attempts' })
         }
         res.setHeader('set-cookie', users.cookie(token))
         return sendJson(res, 200, { ok: true })
@@ -312,22 +305,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         return sendJson(res, 403, { error: 'Login required' })
     }
 
-    if (method === 'POST' && path === '/api/me/password') {
-        const body = await readJson(req)
-        if (!users.checkPassword(user.id, String(body.current ?? ''))) {
-            return sendJson(res, 401, { error: 'Current password is wrong' })
-        }
-        try {
-            users.update(user.id, { password: String(body.password ?? '') })
-        } catch (err) {
-            return sendJson(res, 400, { error: (err as Error).message })
-        }
-        const token = users.login(user.name, String(body.password), req.socket.remoteAddress ?? '')
-        res.setHeader('set-cookie', users.cookie(token!)) // the change logged out every session, this one included
-        return sendJson(res, 200, { ok: true })
-    }
     if (path.startsWith('/api/admin/')) {
-        return user.admin ? admin(req, res, user, method, path) : sendJson(res, 403, { error: 'Admins only' })
+        if (!user.admin) {
+            return sendJson(res, 403, { error: 'Admins only' })
+        }
+        return method === 'GET' && path === '/api/admin/overview' ? sendJson(res, 200, overview()) : sendJson(res, 404, { error: 'Not found' })
     }
 
     if (method === 'GET' && path === '/api/rooms') {
@@ -406,62 +388,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return sendJson(res, 404, { error: 'Not found' })
 }
 
-/** The admin dashboard's API: an overview, and creating and changing accounts. */
-async function admin(req: IncomingMessage, res: ServerResponse, me: User, method: string, path: string): Promise<void> {
-
-    if (method === 'GET' && path === '/api/admin/overview') {
-        return sendJson(res, 200, overview())
-    }
-    if (method === 'POST' && path === '/api/admin/users') {
-        const body = await readJson(req)
-        try {
-            return sendJson(res, 200, users.create(String(body.name ?? '').trim(), String(body.password ?? ''), body.admin === true))
-        } catch (err) {
-            return sendJson(res, 400, { error: (err as Error).message })
-        }
-    }
-
-    const target = /^\/api\/admin\/users\/([\w-]+)$/.exec(path)
-    const user = target ? users.get(target[1]) : null
-    if (!user) {
-        return sendJson(res, 404, { error: 'Not found' })
-    }
-    if (method === 'DELETE') {
-        if (user.id === me.id) {
-            return sendJson(res, 400, { error: 'You can’t delete yourself' })
-        }
-        users.remove(user.id)
-        await endRoomsOf(user.id)
-        return sendJson(res, 200, { ok: true })
-    }
-    if (method === 'PATCH') {
-        const body = await readJson(req)
-        const change = {
-            password: typeof body.password === 'string' ? body.password : undefined,
-            admin: typeof body.admin === 'boolean' ? body.admin : undefined,
-            disabled: typeof body.disabled === 'boolean' ? body.disabled : undefined,
-        }
-        if (user.id === me.id && (change.admin === false || change.disabled === true)) {
-            return sendJson(res, 400, { error: 'You can’t remove your own admin rights or disable yourself' })
-        }
-        try {
-            const updated = users.update(user.id, change)
-            if (updated.disabled) {
-                await endRoomsOf(user.id)
-            }
-            return sendJson(res, 200, updated)
-        } catch (err) {
-            return sendJson(res, 400, { error: (err as Error).message })
-        }
-    }
-
-    return sendJson(res, 404, { error: 'Not found' })
-}
-
-/**
- * GET ?lang=eng searches the playing item's subtitles through Jellyfin's subtitle plugins (OpenSubtitles);
- * POST { id } has Jellyfin download one and answers with the new subtitle stream's index once Jellyfin lists it.
- */
 async function subtitles(req: IncomingMessage, res: ServerResponse, room: Room, url: URL): Promise<void> {
 
     const item = room.queue[room.index]
@@ -532,6 +458,7 @@ const server = createServer((req, res) => {
 /** Host ends the room: everyone is disconnected as from a deleted room and its transcodes stop. */
 async function endRoom(room: Room): Promise<void> {
 
+    saveProgress(room, true)
     rooms.delete(room.id)
     emptySince.delete(room.id)
     locks.delete(room.id)
@@ -721,8 +648,37 @@ setInterval(() => {
     for (const id of deleted) {
         clients.delete(id)
         locks.delete(id)
+        progress.delete(id) // empty for 5 minutes: the host's progress was saved while they were there
     }
 }, 1000)
+
+/**
+ * Saves the host's watch progress to their Jellyfin account while they are in the room: their own item, not guests'.
+ * final: the room is ending, save what's known now.
+ */
+function saveProgress(room: Room, final = false): void {
+    const last = progress.get(room.id)
+    const item = room.queue[room.index]
+    if (last && (final || last.itemId !== item?.id)) {
+        jf.saveProgress(room.owner, last.itemId, last.position, last.runtime).catch(() => {})
+        progress.delete(room.id)
+    }
+    if (final || !item || !viewersOf(room).some(c => c.isHost)) {
+        return
+    }
+    const position = currentPosition(room, Date.now())
+    if (last?.itemId === item.id && Math.abs(last.position - position) < 1) {
+        return // paused: nothing new to save
+    }
+    progress.set(room.id, { itemId: item.id, position, runtime: item.runtime })
+    jf.saveProgress(room.owner, item.id, position, item.runtime).catch(() => {})
+}
+
+setInterval(() => {
+    for (const room of rooms.values()) {
+        saveProgress(room)
+    }
+}, 10_000)
 
 setInterval(() => {
     for (const ws of wss.clients) {
@@ -739,6 +695,10 @@ async function checkJellyfin(): Promise<void> {
     try {
         const info = await jf.systemInfo()
         await jf.resolveUser()
+        accounts = await jf.accounts()
+        for (const id of users.refresh(accounts)) {
+            await endRoomsOf(id) // disabled or deleted in Jellyfin
+        }
         jellyfinInfo = info
         jellyfinError = null
         if (before !== null) {
