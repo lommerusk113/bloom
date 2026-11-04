@@ -87,6 +87,7 @@ function openSocket(roomId: string, cookie?: string, origin?: string) {
         send: (msg: unknown) => ws.send(JSON.stringify(msg)),
         messages,
         close: () => ws.close(),
+        onClose: (fn: (code: number) => void) => ws.on('close', fn),
         next: (match: (m: Record<string, any>) => boolean) => waitFor(async () => messages.find(match)),
     }
 }
@@ -165,10 +166,38 @@ test('room sockets share state and know who is host', async () => {
 
     guest.send({ type: 'cmd', cmd: { type: 'setGuestControl', value: false } })
     host.send({ type: 'cmd', cmd: { type: 'setGuestControl', value: false } })
-    const state = await guest.next(m => m.type === 'state' && m.room.guestControl === false && m.viewers.includes('Alice'))
-    assert.deepEqual([...state.viewers].sort(), ['Alice', 'Host'])
+    const state = await guest.next(m => m.type === 'state' && m.room.guestControl === false && m.viewers.some((v: { name: string }) => v.name === 'Alice'))
+    assert.deepEqual(state.viewers.map((v: { name: string }) => v.name).sort(), ['Alice', 'Host'])
     host.close()
     guest.close()
+})
+
+test('the host sees who did what, everyone sees reactions, and the host can remove a guest', async () => {
+    const cookie = await login()
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
+    const host = openSocket(id, cookie, BASE)
+    const guest = openSocket(id)
+    await Promise.all([host.ready, guest.ready])
+    host.send({ type: 'hello', name: 'Host' })
+    guest.send({ type: 'hello', name: 'Alice' })
+    await guest.next(m => m.type === 'state' && m.viewers.length === 2)
+
+    guest.send({ type: 'cmd', cmd: { type: 'pause' } }) // nothing queued: rejected, so not logged
+    guest.send({ type: 'cmd', cmd: { type: 'setGuestControl', value: true } }) // host only: rejected
+    host.send({ type: 'cmd', cmd: { type: 'setGuestControl', value: false } })
+    const log = await host.next(m => m.type === 'log' && m.entries.length > 0)
+    assert.deepEqual(log.entries.map((e: { name: string; text: string }) => `${e.name} ${e.text}`), ['Host (host) took back control of playback'])
+    assert.equal(guest.messages.some(m => m.type === 'log'), false)
+
+    guest.send({ type: 'react', emoji: '🔥' })
+    guest.send({ type: 'react', emoji: '<script>' })
+    assert.deepEqual(await host.next(m => m.type === 'reaction'), { type: 'reaction', emoji: '🔥', name: 'Alice' })
+
+    const alice = (await host.next(m => m.type === 'state' && m.viewers.length === 2)).viewers.find((v: { name: string }) => v.name === 'Alice')
+    const closed = new Promise<number>(resolve => guest.onClose(resolve))
+    host.send({ type: 'kick', id: alice.id })
+    assert.equal(await closed, 4403)
+    host.close()
 })
 
 test('an oversized websocket frame drops only that client', async () => {
@@ -268,11 +297,11 @@ test('websocket messages beyond the rate limit are dropped', async () => {
     for (let i = 0; i < 200; i++) {
         guest.send({ type: 'hello', name: `G${i}` })
     }
-    await guest.next(m => m.type === 'state' && m.viewers.includes('G19'))
+    await guest.next(m => m.type === 'state' && m.viewers.some((v: { name: string }) => v.name === 'G19'))
     await sleep(300)
     // only the first 20 hellos (G0..G19) fit the 1s window; later names must never be applied
     const last = guest.messages.filter(m => m.type === 'state').at(-1)
-    assert.deepEqual(last?.viewers, ['G19'])
+    assert.deepEqual(last?.viewers.map((v: { name: string }) => v.name), ['G19'])
     assert.equal((await fetch(`${BASE}/api/health`)).status, 200)
     guest.close()
 })

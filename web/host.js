@@ -180,6 +180,8 @@ function manage(room) {
         } else if (msg.type === 'state') {
             state = msg
             render()
+        } else if (msg.type === 'log') {
+            renderLog(msg.entries)
         }
     }, true)
 
@@ -272,6 +274,10 @@ async function home() {
         return
     }
     $('rows').prepend(...discover.shelves.filter(s => s.items.length).map(s => shelf(s.title, async () => s.items)))
+    const resume = await api('/api/resume').catch(() => [])
+    if (resume.length && token === browseToken) {
+        $('rows').prepend(shelf('Continue watching', async () => resume))
+    }
     const featured = discover.shelves[0]?.items[0] ?? (await api(`/api/latest?parent=${encodeURIComponent(views[0]?.id ?? '')}`).catch(() => []))[0]
     if (featured && token === browseToken) {
         showHero(featured.id, token)
@@ -316,8 +322,43 @@ function actions(d) {
             addItem(d.id)
             e.target.textContent = '✓ Added'
         }),
+        button('+ Add to vote', (e) => {
+            if (!voteDraft.some(o => o.id === d.id) && voteDraft.length < 4) {
+                voteDraft.push({ id: d.id, name: d.name })
+            }
+            e.target.textContent = '✓ In the vote'
+            renderVote()
+        }, { disabled: voteDraft.length >= 4 && !voteDraft.some(o => o.id === d.id) }),
     )
     return row
+}
+
+// --- votes: the host picks 2–4 titles, guests vote in the player, the winner plays next ---
+
+let voteDraft = []
+
+function renderVote() {
+    const vote = state?.room.vote
+    $('votePanel').hidden = !vote && voteDraft.length === 0
+    if (vote) {
+        const ballots = Object.values(vote.ballots)
+        $('voteList').replaceChildren(...vote.options.map((o, i) => li(`${o.name} · ${ballots.filter(b => b === i).length}`)))
+        $('voteNote').textContent = `Voting now · ${Math.max(0, Math.ceil((vote.endsAt - socket.serverNow()) / 1000))}s left · the winner plays next`
+        $('voteActions').replaceChildren(
+            button('End now', () => socket.send({ type: 'voteEnd' }), { className: 'primary' }),
+            button('Cancel', () => socket.send({ type: 'voteCancel' })),
+        )
+        return
+    }
+    $('voteList').replaceChildren(...voteDraft.map((o, i) => li(o.name, button('✕', () => {
+        voteDraft.splice(i, 1)
+        renderVote()
+    }, { title: 'Remove from the vote' }))))
+    $('voteNote').textContent = voteDraft.length < 2 ? 'Add at least two titles with “+ Add to vote”.' : 'Everyone in the player gets 60 seconds to vote.'
+    $('voteActions').replaceChildren(button('Start vote', () => {
+        socket.send({ type: 'voteStart', itemIds: voteDraft.map(o => o.id) })
+        voteDraft = []
+    }, { className: 'primary', disabled: voteDraft.length < 2 }))
 }
 
 /** The details popup: backdrop, poster, facts, overview, and seasons with episodes for a show. */
@@ -491,6 +532,11 @@ function card(trail, i) {
     if (i.rating) {
         art.append(el('span', 'rating', `♥ ${Math.round(i.rating * 10)}%`))
     }
+    if (i.progress) {
+        const bar = el('span', 'progress')
+        bar.style.width = `${i.progress}%`
+        art.append(bar)
+    }
     const quick = button('+', (event) => {
         event.stopPropagation()
         addItem(i.id)
@@ -510,6 +556,9 @@ function card(trail, i) {
 }
 
 function renderTime() {
+    if (state?.room.vote) {
+        renderVote() // its countdown
+    }
     const item = state?.room.queue[state.room.index]
     if (!item) {
         $('nowTime').textContent = 'Click a poster to add it'
@@ -522,6 +571,7 @@ function renderTime() {
 
 function render() {
     const { room, viewers } = state
+    renderVote()
     const item = room.queue[room.index]
     $('guestControl').checked = room.guestControl
     $('nowHeading').textContent = !item ? 'Nothing playing' : room.waiting ? 'Loading…' : room.playing ? 'Now playing' : 'Paused'
@@ -544,7 +594,30 @@ function render() {
         return row
     }))
 
-    $('viewers').replaceChildren(...(viewers.length ? viewers.map(v => el('span', 'chip', v)) : [el('span', 'muted', 'Nobody yet — share the link above')]))
+    $('viewers').replaceChildren(...(viewers.length ? viewers.map(viewerChip) : [el('span', 'muted', 'Nobody yet — share the link above')]))
+}
+
+/** A viewer's name; guests get a ✕ that removes them from the room. */
+function viewerChip(v) {
+    const chip = el('span', 'chip', v.host ? `${v.name} ★` : v.name)
+    if (!v.host) {
+        chip.append(button('✕', () => {
+            if (confirm(`Remove ${v.name} from the room? To keep them out, also set a password.`)) {
+                socket.send({ type: 'kick', id: v.id })
+            }
+        }, { className: 'kick', title: `Remove ${v.name}` }))
+    }
+    return chip
+}
+
+function renderLog(entries) {
+    $('emptyLog').hidden = entries.length > 0
+    $('log').replaceChildren(...entries.toReversed().map((e) => {
+        const time = el('time', '', new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
+        const row = el('li')
+        row.append(time, `${e.name} ${e.text}`)
+        return row
+    }))
 }
 
 start().catch((err) => {

@@ -196,6 +196,19 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
             }
         },
 
+        /** The user's half-watched movies and episodes, most recent first, with how far they got (0–100). */
+        async resume(userId: string): Promise<Array<Card & { progress: number }>> {
+            const query = new URLSearchParams({ userId, Limit: '24', MediaTypes: 'Video', EnableUserData: 'true' })
+            const res = await json<{ Items: Array<JfItem & { UserData?: { PlayedPercentage?: number } }> }>(`/UserItems/Resume?${query}`)
+            return res.Items.map(i => ({ ...card(i), progress: Math.round(i.UserData?.PlayedPercentage ?? 0) }))
+        },
+
+        /** Where the user left off in an item, in seconds; 0 when not started or watched. */
+        async resumePosition(userId: string, itemId: string): Promise<number> {
+            const data = await json<{ PlaybackPositionTicks?: number }>(`/UserItems/${encodeURIComponent(itemId)}/UserData?${new URLSearchParams({ userId })}`)
+            return (data.PlaybackPositionTicks ?? 0) / TICKS_PER_SECOND
+        },
+
         /** Intro, recap, credits and preview ranges in seconds; empty without a segment plugin such as Intro Skipper. */
         async segments(itemId: string): Promise<Segment[]> {
             const res = await json<{ Items: Array<{ Type: string; StartTicks: number; EndTicks: number }> }>(`/MediaSegments/${encodeURIComponent(itemId)}`)

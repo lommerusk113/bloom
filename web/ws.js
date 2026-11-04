@@ -59,6 +59,10 @@ export function connectRoom(roomId, name, onMessage, observer = false) {
                 onMessage({ type: 'locked' })
                 return
             }
+            if (event.code === 4403) {
+                onMessage({ type: 'kicked' })
+                return
+            }
             onMessage({ type: 'error', message: 'Connection lost – reconnecting…' })
             delay = nextBackoff(delay, 1000, 15_000)
             setTimeout(open, delay)

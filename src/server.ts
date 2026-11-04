@@ -8,18 +8,22 @@ import { createUsers, type Account } from './users.ts'
 import { createJellyfin, type Card } from './jellyfin.ts'
 import { createTmdb, type TmdbType } from './tmdb.ts'
 import { activeStreams, proxyRequest, readBody, stopRoomStreams } from './proxy.ts'
-import { apply, createRoom, currentPosition, parseCommand, setWaiting, sweepRooms, type Room } from './room.ts'
+import { apply, createRoom, currentPosition, describe, parseCommand, playNext, voteWinner, setWaiting, sweepRooms, type Room } from './room.ts'
 
 /**
  * windowStart/count/strikes: websocket rate limit state, see overLimit. bufferingSince: 0 unless the client's player is loading.
  * speed: the viewer's measured download speed in Mbps, 0 until reported.
  */
-type Client = { ws: WebSocket; name: string; isHost: boolean; observer: boolean; windowStart: number; count: number; strikes: number; bufferingSince: number; speed: number }
+type Client = { id: string; ws: WebSocket; name: string; lastReaction: number; isHost: boolean; observer: boolean; windowStart: number; count: number; strikes: number; bufferingSince: number; speed: number }
 
 const alive = new WeakSet<WebSocket>()
 
 const MAX_MESSAGES_PER_SECOND = 20
 const MAX_STRIKES = 5
+const REACTIONS = new Set(['😂', '😮', '😍', '👏', '😱', '🔥'])
+const REACTION_GAP_MS = 300
+const VOTE_MS = 60_000
+const ITEM_ID = /^[0-9a-f-]{32,36}$/i
 const MAX_CLIENTS_PER_ROOM = 50
 /** A client this far behind on reading is dropped rather than buffering every state for it. */
 const MAX_BUFFERED_BYTES = 1_000_000
@@ -54,6 +58,9 @@ const locks = new Map<string, { password: string; auth: ReturnType<typeof create
 const rooms = new Map<string, Room>()
 const clients = new Map<string, Set<Client>>()
 const emptySince = new Map<string, number>()
+/** Per room: who did what, newest last; only its host sees it. */
+const logs = new Map<string, Array<{ at: number; name: string; text: string }>>()
+const LOG_SIZE = 100
 const pendingBroadcasts = new Set<Room>()
 let flushTimer: NodeJS.Timeout | undefined
 let jellyfinError: string | null = 'Not checked yet'
@@ -89,7 +96,7 @@ function updateWaiting(room: Room, now = Date.now()): void {
 
 function stateMessage(room: Room): string {
     const now = Date.now()
-    const viewers = [...(clients.get(room.id) ?? [])].filter(c => !c.observer).map(c => c.name)
+    const viewers = viewersOf(room).map(c => ({ id: c.id, name: c.name, host: c.isHost }))
     const waitingFor = room.waiting ? blockers(room, now).map(c => c.name) : []
     return JSON.stringify({ type: 'state', room, viewers, waitingFor, serverNow: now })
 }
@@ -124,6 +131,24 @@ function sendState(room: Room): void {
     const message = stateMessage(room)
     for (const client of clients.get(room.id) ?? []) {
         send(client, message)
+    }
+}
+
+/** Adds to the room's activity log and sends the log to the host's pages. */
+function logAction(room: Room, client: Client, text: string): void {
+    const log = logs.get(room.id) ?? []
+    logs.set(room.id, log)
+    log.push({ at: Date.now(), name: client.isHost ? `${client.name} (host)` : client.name, text })
+    log.splice(0, log.length - LOG_SIZE)
+    sendLog(room)
+}
+
+function sendLog(room: Room, only?: Client): void {
+    const message = JSON.stringify({ type: 'log', entries: logs.get(room.id) ?? [] })
+    for (const client of only ? [only] : clients.get(room.id) ?? []) {
+        if (client.isHost) {
+            send(client, message)
+        }
     }
 }
 
@@ -208,7 +233,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         return proxyRequest(req, res, room, proxied[2] + url.search, jf)
     }
 
-    const roomTool = /^\/r\/([\w-]+)\/(speedtest|subtitles|segments)$/.exec(path)
+    const roomTool = /^\/r\/([\w-]+)\/(speedtest|subtitles|segments|poster)$/.exec(path)
     if (roomTool) {
         const room = rooms.get(roomTool[1])
         if (!room) {
@@ -226,6 +251,18 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
                 }
             }
             res.end()
+            return
+        }
+        if (roomTool[2] === 'poster') {
+            // the lock screen's artwork: guests can't use /api/image, which needs an account
+            const item = room.queue[room.index]
+            const image = item ? await jf.image(item.id) : null
+            if (!image?.ok) {
+                res.writeHead(404).end()
+                return
+            }
+            res.writeHead(200, { 'content-type': image.headers.get('content-type') ?? 'image/jpeg', 'cache-control': 'private, max-age=300' })
+            res.end(Buffer.from(await image.arrayBuffer()))
             return
         }
         if (roomTool[2] === 'segments') {
@@ -381,6 +418,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         res.end(Buffer.from(await image.arrayBuffer()))
         return
     }
+    if (method === 'GET' && path === '/api/resume') {
+        return sendJson(res, 200, await jf.resume(user.id))
+    }
     if (method === 'GET' && path === '/api/children') {
         return sendJson(res, 200, await jf.children(url.searchParams.get('id') ?? ''))
     }
@@ -462,6 +502,7 @@ async function endRoom(room: Room): Promise<void> {
     rooms.delete(room.id)
     emptySince.delete(room.id)
     locks.delete(room.id)
+    logs.delete(room.id)
     for (const client of clients.get(room.id) ?? []) {
         client.ws.close(4404, 'Room ended')
     }
@@ -507,7 +548,7 @@ server.on('upgrade', (req, socket, head) => {
 
 function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
 
-    const client: Client = { ws, name: 'Guest', isHost, observer: false, windowStart: 0, count: 0, strikes: 0, bufferingSince: 0, speed: 0 }
+    const client: Client = { id: randomBytes(8).toString('base64url'), lastReaction: 0, ws, name: 'Guest', isHost, observer: false, windowStart: 0, count: 0, strikes: 0, bufferingSince: 0, speed: 0 }
     const set = clients.get(room.id) ?? new Set<Client>()
     clients.set(room.id, set)
     set.add(client)
@@ -515,7 +556,8 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
     ws.on('pong', () => alive.add(ws))
     // oversized or malformed frames emit 'error'; unhandled it would crash the process
     ws.on('error', () => ws.terminate())
-    send(client, JSON.stringify({ type: 'welcome', isHost }))
+    send(client, JSON.stringify({ type: 'welcome', isHost, id: client.id }))
+    sendLog(room, client)
     broadcast(room)
 
     ws.on('message', data => {
@@ -611,10 +653,12 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
             return
         case 'cmd': {
             const cmd = parseCommand(msg.cmd)
+            const text = cmd && describe(room, cmd)
             if (!cmd || !apply(room, cmd, client.isHost, now)) {
                 send(client, stateMessage(room)) // rejected: resync the sender
                 return
             }
+            logAction(room, client, text!)
             updateWaiting(room, now)
             break
         }
@@ -624,16 +668,97 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
             }
             {
                 const first = room.queue.length
-                if (apply(room, { type: 'queueAdd', items: await jf.queueItems(String(msg.itemId)) }, true, now) && msg.playNow === true) {
+                const items = await jf.queueItems(String(msg.itemId))
+                if (items.length) {
+                    logAction(room, client, msg.playNow === true ? `started ${items[0].name}` : describe(room, { type: 'queueAdd', items }))
+                }
+                if (apply(room, { type: 'queueAdd', items }, true, now) && msg.playNow === true) {
                     apply(room, { type: 'jump', index: first }, true, Date.now()) // "Watch now": start what was just added
+                    // a movie or episode the host is partway through picks up where they left off
+                    const resumeAt = items.length === 1 ? await jf.resumePosition(room.owner, items[0].id).catch(() => 0) : 0
+                    if (resumeAt > 0 && room.queue[room.index] === items[0]) {
+                        apply(room, { type: 'seek', position: resumeAt }, true, Date.now())
+                    }
                 }
             }
             updateWaiting(room)
+            break
+        case 'react': {
+            const emoji = String(msg.emoji)
+            if (!REACTIONS.has(emoji) || client.observer || now - client.lastReaction < REACTION_GAP_MS) {
+                return
+            }
+            client.lastReaction = now
+            const reaction = JSON.stringify({ type: 'reaction', emoji, name: client.name })
+            for (const other of clients.get(room.id) ?? []) {
+                send(other, reaction)
+            }
+            return
+        }
+        case 'voteStart': {
+            if (!client.isHost) {
+                return
+            }
+            const ids = Array.isArray(msg.itemIds) ? [...new Set(msg.itemIds.map(String))].filter(id => ITEM_ID.test(id)).slice(0, 4) : []
+            const found = await Promise.all(ids.map(id => jf.details(id).catch(() => null)))
+            const options = found.filter(d => d !== null).map(d => ({ id: d.id, name: d.name }))
+            if (options.length < 2) {
+                throw new Error('A vote needs at least two titles')
+            }
+            room.vote = { options, ballots: {}, endsAt: now + VOTE_MS }
+            logAction(room, client, `started a vote: ${options.map(o => o.name).join(' / ')}`)
+            break
+        }
+        case 'vote': {
+            const choice = Number(msg.option)
+            if (!room.vote || client.observer || !Number.isInteger(choice) || choice < 0 || choice >= room.vote.options.length) {
+                return
+            }
+            room.vote.ballots[client.id] = choice
+            if (viewersOf(room).every(c => c.id in room.vote!.ballots)) {
+                await finishVote(room) // everyone has voted
+                return
+            }
+            break
+        }
+        case 'kick': {
+            const target = client.isHost ? viewersOf(room).find(c => c.id === msg.id && !c.isHost) : undefined
+            if (!target) {
+                return
+            }
+            logAction(room, client, `removed ${target.name} from the room`)
+            target.ws.close(4403, 'Removed by the host')
+            return
+        }
+        case 'voteEnd':
+        case 'voteCancel':
+            if (!client.isHost || !room.vote) {
+                return
+            }
+            if (msg.type === 'voteEnd') {
+                await finishVote(room)
+                return
+            }
+            room.vote = null
             break
         default:
             return
     }
 
+    broadcast(room)
+}
+
+/** Closes the room's vote: the winner plays next, or right away when nothing is on. */
+async function finishVote(room: Room): Promise<void> {
+
+    const vote = room.vote
+    if (!vote) {
+        return
+    }
+    room.vote = null // before the await: a second finish must not queue the winner twice
+    const winner = vote.options[voteWinner(vote)]
+    playNext(room, await jf.queueItems(winner.id).catch(() => []), Date.now())
+    updateWaiting(room)
     broadcast(room)
 }
 
@@ -644,10 +769,14 @@ setInterval(() => {
     advanced.forEach(broadcast)
     for (const room of rooms.values()) {
         updateWaiting(room) // releases rooms whose blockers hit MAX_WAIT_MS
+        if (room.vote && Date.now() >= room.vote.endsAt) {
+            finishVote(room).catch(err => console.error('Vote failed:', err.message))
+        }
     }
     for (const id of deleted) {
         clients.delete(id)
         locks.delete(id)
+        logs.delete(id)
         progress.delete(id) // empty for 5 minutes: the host's progress was saved while they were there
     }
 }, 1000)

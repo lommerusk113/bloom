@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { setWaiting, advanceIfEnded, apply, createRoom, currentPosition, parseCommand, sweepRooms, ROOM_TTL_MS, type QueueItem, type Room } from '../src/room.ts'
+import { setWaiting, advanceIfEnded, apply, createRoom, currentPosition, parseCommand, playNext, sweepRooms, voteWinner, ROOM_TTL_MS, type QueueItem, type Room } from '../src/room.ts'
 
 const A: QueueItem = { id: 'a'.repeat(32), name: 'A', runtime: 100 }
 const B: QueueItem = { id: 'b'.repeat(32), name: 'B', runtime: 200 }
@@ -139,4 +139,21 @@ test('a waiting room holds its position until released', () => {
     assert.equal(currentPosition(room, 20_000), 10)
     setWaiting(room, false, 20_000)
     assert.equal(currentPosition(room, 25_000), 15)
+})
+
+test('a vote winner plays next, or right away when nothing is on', () => {
+    const a = { id: 'a', name: 'A', runtime: 100 }
+    const b = { id: 'b', name: 'B', runtime: 100 }
+    const room = createRoom('r1', 0)
+    assert.equal(voteWinner({ options: [{ id: 'x', name: 'X' }, { id: 'y', name: 'Y' }], ballots: { p: 1, q: 0, r: 1 }, endsAt: 0 }), 1)
+    assert.equal(voteWinner({ options: [{ id: 'x', name: 'X' }, { id: 'y', name: 'Y' }], ballots: {}, endsAt: 0 }), 0)
+    playNext(room, [a], 0)
+    assert.deepEqual([room.queue.map(q => q.id), room.index, room.playing], [['a'], 0, true])
+    apply(room, { type: 'queueAdd', items: [a] }, true, 0)
+    playNext(room, [b], 10_000)
+    assert.deepEqual([room.queue.map(q => q.id), room.index], [['a', 'b', 'a'], 0]) // after the current, not at the end
+    apply(room, { type: 'jump', index: 2 }, true, 10_000)
+    advanceIfEnded(room, 200_000) // the last item ran out
+    playNext(room, [b], 200_000)
+    assert.deepEqual([room.index, room.queue[room.index].id, room.playing], [3, 'b', true])
 })

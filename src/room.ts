@@ -14,7 +14,11 @@ export type Room = {
     guestControl: boolean
     /** Playing, but held still until buffering viewers catch up. */
     waiting: boolean
+    /** A poll on what to watch next; ballots map a viewer's connection id to the option they picked. */
+    vote: Vote | null
 }
+
+export type Vote = { options: Array<{ id: string; name: string }>; ballots: Record<string, number>; endsAt: number }
 
 export type Command =
     | { type: 'play' }
@@ -31,7 +35,7 @@ export const ROOM_TTL_MS = 5 * 60_000
 const HOST_ONLY: ReadonlySet<Command['type']> = new Set(['queueAdd', 'queueRemove', 'queueMove', 'setGuestControl'])
 
 export function createRoom(id: string, now: number, owner = '', name = 'Room'): Room {
-    return { id, name, owner, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true, waiting: false }
+    return { id, name, owner, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true, waiting: false, vote: null }
 }
 
 export function currentPosition(room: Room, now: number): number {
@@ -79,6 +83,57 @@ export function apply(room: Room, cmd: Command, isHost: boolean, now: number): b
             room.guestControl = cmd.value
             return true
     }
+}
+
+/** What a command did, for the host's activity log; read before applying it, while the queue still holds what it names. */
+export function describe(room: Room, cmd: Command): string {
+    const name = (index: number) => room.queue[index]?.name ?? 'an item'
+    switch (cmd.type) {
+        case 'play':
+            return 'pressed play'
+        case 'pause':
+            return 'paused'
+        case 'seek':
+            return `jumped to ${clock(cmd.position)}`
+        case 'next':
+            return `skipped to ${name(room.index + 1)}`
+        case 'jump':
+            return `started ${name(cmd.index)}`
+        case 'queueAdd':
+            return `queued ${cmd.items[0]?.name ?? 'nothing'}${cmd.items.length > 1 ? ` and ${cmd.items.length - 1} more` : ''}`
+        case 'queueRemove':
+            return `removed ${name(cmd.index)} from the queue`
+        case 'queueMove':
+            return `moved ${name(cmd.from)} in the queue`
+        case 'setGuestControl':
+            return cmd.value ? 'let guests control playback' : 'took back control of playback'
+    }
+}
+
+function clock(seconds: number): string {
+    const s = Math.max(0, Math.floor(seconds))
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return s >= 3600 ? `${Math.floor(s / 3600)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}` : `${Math.floor(s / 60)}:${pad(s % 60)}`
+}
+
+/** The option with the most ballots; a tie goes to the one listed first. */
+export function voteWinner(vote: Vote): number {
+    const counts = vote.options.map((_, i) => Object.values(vote.ballots).filter(b => b === i).length)
+    return counts.indexOf(Math.max(...counts))
+}
+
+/** Queues items right after the current one; plays them now when nothing is on or the queue has run out. */
+export function playNext(room: Room, items: QueueItem[], now: number): boolean {
+    if (items.length === 0) {
+        return false
+    }
+    const current = room.queue[room.index]
+    const finished = !current || (!room.playing && current.runtime > 0 && room.position >= current.runtime)
+    room.queue.splice(current ? room.index + 1 : room.queue.length, 0, ...items)
+    if (finished) {
+        jumpTo(room, current ? room.index + 1 : room.queue.length - items.length, now)
+    }
+    return true
 }
 
 /** Moves to the next item once the current one has played to its runtime. */

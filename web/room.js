@@ -27,6 +27,7 @@ let pendingSeek = false // a seek while playing whose landing drift hasn't been 
 let lastSeekedAt = 0
 let stalled = false     // buffering: currentTime frozen while not seeking
 let myName = ''
+let myId = ''         // this connection's id: finds our own ballot in a vote
 let personal = false // loading for this viewer alone (joining, own audio/subtitle/quality pick): don't hold the room
 let loadedOnce = false
 let catchUp = null    // { at, lead }: loading ahead of the room alone; starts playing when the room reaches `at`
@@ -156,6 +157,7 @@ $('watchHere').onclick = () => {
 function onMessage(msg) {
     if (msg.type === 'welcome') {
         isHost = msg.isHost
+        myId = msg.id
         reportedBuffering = false // a new connection starts out not buffering on the server
         if (speedMbps !== null) {
             socket.send({ type: 'speed', value: speedMbps })
@@ -163,6 +165,10 @@ function onMessage(msg) {
         $('manage').hidden = !isHost || (frame && !screenDoc.fullscreenElement)
         $('manage').href = `/?room=${roomId}`
         $('status').textContent = ''
+        return
+    }
+    if (msg.type === 'reaction') {
+        showReaction(msg.emoji, msg.name)
         return
     }
     if (msg.type === 'error') {
@@ -174,7 +180,7 @@ function onMessage(msg) {
         location.reload()
         return
     }
-    if (msg.type === 'gone') {
+    if (msg.type === 'gone' || msg.type === 'kicked') {
         state = null // syncNow stops driving the player and Chromecast
         cast?.stop()
         unloadStream()
@@ -182,7 +188,7 @@ function onMessage(msg) {
         for (const id of CONTROLS) {
             $(id).disabled = true // their handlers read state
         }
-        $('status').textContent = 'This room no longer exists'
+        $('status').textContent = msg.type === 'kicked' ? 'The host removed you from the room' : 'This room no longer exists'
         return
     }
     if (msg.type !== 'state') {
@@ -249,6 +255,7 @@ async function load(itemId, solo = false) {
     }
     if (current?.itemId !== itemId) {
         clearSubtitles() // the previous item's subtitles must not show over this one
+        nudgeSubtitles(-subOffset) // timing fixes are per file
     }
     current = { itemId, source: null, last: current?.itemId === itemId ? (current.source ?? current.last) : null }
     try {
@@ -380,8 +387,34 @@ function showSubtitles() {
         track.default = true
         video.append(track)
         track.track.mode = 'showing'
+        track.addEventListener('load', () => shiftCues(track.track, subOffset))
     }).catch(() => {})
 }
+
+// --- subtitle timing: per viewer, for subtitles that run a little early or late ---
+
+let subOffset = 0
+
+function shiftCues(textTrack, seconds) {
+    for (const cue of textTrack?.cues ?? []) {
+        // move the far edge first so a cue never ends before it starts
+        if (seconds > 0) {
+            cue.endTime += seconds
+            cue.startTime += seconds
+        } else {
+            cue.startTime = Math.max(0, cue.startTime + seconds)
+            cue.endTime = Math.max(cue.startTime, cue.endTime + seconds)
+        }
+    }
+}
+
+function nudgeSubtitles(seconds) {
+    subOffset = Math.round((subOffset + seconds) * 10) / 10
+    shiftCues(video.querySelector('track')?.track, seconds)
+    $('subOffset').textContent = `${subOffset > 0 ? '+' : ''}${subOffset.toFixed(1)}s`
+}
+$('subEarlier').onclick = () => nudgeSubtitles(-0.5)
+$('subLater').onclick = () => nudgeSubtitles(0.5)
 
 function fill(select, options, selected) {
     select.replaceChildren(...options.map(([value, label]) => new Option(label, value, false, value === selected)))
@@ -675,6 +708,7 @@ function clock(seconds) {
 
 function render() {
     const { room, viewers } = state
+    renderVote()
     const item = room.queue[room.index]
     const canControl = isHost || room.guestControl
     for (const id of CONTROLS) {
@@ -692,7 +726,8 @@ function render() {
         span.title = title
         return span
     }
-    $('viewers').replaceChildren(...viewers.map(v => chip(v)))
+    $('viewers').replaceChildren(...viewers.map(v => chip(v.name)))
+    showMediaSession(room, item)
 }
 
 // --- sync ---
@@ -716,6 +751,137 @@ function noteStall() {
     load(current.itemId, true)
 }
 
+// --- phone lock screen and headset buttons ---
+
+const mediaSession = 'mediaSession' in navigator ? navigator.mediaSession : null
+let sessionItem = null
+
+function showMediaSession(room, item) {
+    if (!mediaSession) {
+        return
+    }
+    if (item?.id !== sessionItem) {
+        sessionItem = item?.id ?? null
+        mediaSession.metadata = item
+            ? new MediaMetadata({ title: item.name, artist: room.name, artwork: [{ src: `/r/${roomId}/poster?item=${item.id}`, sizes: '320x480', type: 'image/jpeg' }] })
+            : null
+    }
+    mediaSession.playbackState = room.playing ? 'playing' : 'paused'
+}
+
+/** Lock-screen buttons send room commands like the on-screen ones, when this viewer may control playback. */
+function sessionAction(action, cmd) {
+    try {
+        mediaSession?.setActionHandler(action, () => {
+            if (state && (isHost || state.room.guestControl)) {
+                command(cmd())
+            }
+        })
+    } catch {
+        // the browser doesn't offer this button
+    }
+}
+sessionAction('play', () => ({ type: 'play' }))
+sessionAction('pause', () => ({ type: 'pause' }))
+sessionAction('seekbackward', () => ({ type: 'seek', position: Math.max(0, currentTarget() - 10) }))
+sessionAction('seekforward', () => ({ type: 'seek', position: currentTarget() + 30 }))
+sessionAction('nexttrack', () => ({ type: 'next' }))
+
+function showSessionPosition(position, runtime) {
+    try {
+        if (runtime > 0) {
+            mediaSession?.setPositionState({ duration: runtime, position: Math.min(Math.max(position, 0), runtime), playbackRate: 1 })
+        }
+    } catch {
+        // an older browser without position state
+    }
+}
+
+// --- up next, votes and reactions ---
+
+const UP_NEXT_S = 15
+
+/** The last seconds of an item: what plays next, with "Play now" and "Pause" for viewers who may control playback. */
+function showUpNext(target) {
+    const { room } = state
+    const item = room.queue[room.index]
+    const next = room.queue[room.index + 1]
+    const left = (item?.runtime ?? 0) - target
+    $('upNext').hidden = !next || !room.playing || !item.runtime || left > UP_NEXT_S || left <= 0
+    if ($('upNext').hidden) {
+        return
+    }
+    $('upNextName').textContent = next.name
+    $('upNextIn').textContent = `starting in ${Math.ceil(left)}s`
+    $('upNextActions').hidden = !(isHost || room.guestControl)
+}
+$('upNextPlay').onclick = () => command({ type: 'next' })
+$('upNextPause').onclick = () => command({ type: 'pause' })
+
+function renderVote() {
+    const vote = state.room.vote
+    $('vote').hidden = !vote
+    if (!vote) {
+        return
+    }
+    const ballots = Object.values(vote.ballots)
+    $('voteOptions').replaceChildren(...vote.options.map((option, i) => {
+        const pick = document.createElement('button')
+        pick.classList.toggle('mine', vote.ballots[myId] === i)
+        const count = ballots.filter(b => b === i).length
+        const label = document.createElement('span')
+        label.textContent = option.name
+        const tally = document.createElement('span')
+        tally.className = 'count'
+        tally.textContent = `${count} vote${count === 1 ? '' : 's'}`
+        pick.append(label, tally)
+        pick.onclick = () => socket.send({ type: 'vote', option: i })
+        return pick
+    }))
+    showVoteTime()
+}
+
+function showVoteTime() {
+    const vote = state?.room.vote
+    if (vote) {
+        $('voteIn').textContent = `${Math.max(0, Math.ceil((vote.endsAt - socket.serverNow()) / 1000))}s left`
+    }
+}
+
+const REACTIONS = ['😂', '😮', '😍', '👏', '😱', '🔥']
+$('reactBar').replaceChildren(...REACTIONS.map((emoji) => {
+    const b = document.createElement('button')
+    b.textContent = emoji
+    b.title = `React ${emoji}`
+    b.onclick = () => socket?.send({ type: 'react', emoji })
+    return b
+}))
+$('reactButton').onclick = (event) => {
+    event.stopPropagation()
+    $('reactBar').hidden = !$('reactBar').hidden
+    $('reactButton').setAttribute('aria-expanded', String(!$('reactBar').hidden))
+}
+$('reactBar').onclick = (event) => event.stopPropagation()
+document.addEventListener('click', () => {
+    $('reactBar').hidden = true
+    $('reactButton').setAttribute('aria-expanded', 'false')
+})
+
+/** Floats someone's reaction up the screen, everyone's own included. */
+function showReaction(emoji, name) {
+    if ($('reactionLayer').childElementCount > 30) {
+        return // a flood would only bury the movie
+    }
+    const bubble = document.createElement('div')
+    bubble.className = 'reaction'
+    bubble.style.left = `${60 + Math.random() * 30}%`
+    const who = document.createElement('small')
+    who.textContent = name
+    bubble.append(emoji, who)
+    bubble.addEventListener('animationend', () => bubble.remove())
+    $('reactionLayer').append(bubble)
+}
+
 const SKIP_LABELS = { Intro: 'Skip intro', Recap: 'Skip recap', Outro: 'Skip credits', Preview: 'Skip preview' }
 
 /** Shows "Skip intro"/"Skip credits" while the room is inside such a segment, for viewers who may control playback. */
@@ -732,7 +898,7 @@ function showSkip(target, local) {
     }
     const segment = segments.list.find(s => target >= s.start && target < s.end - 1)
     const canControl = isHost || room.guestControl
-    $('skip').hidden = !segment || !canControl || (!local && !cast?.active())
+    $('skip').hidden = !segment || !canControl || (!local && !cast?.active()) || !$('upNext').hidden
     if (segment) {
         $('skip').textContent = SKIP_LABELS[segment.type] ?? 'Skip'
         // credits that run to the end: on to the next item instead of the last second of this one
@@ -812,7 +978,9 @@ function syncNow() {
     wasFrozen = frozen
     stalled ||= frozen
     reportBuffering(Boolean(room.queue[room.index]) && !cast?.active() && !advancing && (!local || video.seeking || stalled || video.readyState < 3))
+    showUpNext(target)
     showSkip(target, local)
+    showVoteTime()
     const waitingFor = state.waitingFor.filter(name => name !== myName)
     $('wait').textContent = room.waiting ? `Waiting for ${waitingFor.join(', ') || 'you'} to load…` : ''
     // the counter shows this player's own position, so it stops while it loads
@@ -821,6 +989,7 @@ function syncNow() {
         $('seek').value = String(Math.floor(position))
     }
     const shown = dragging ? Number($('seek').value) : position
+    showSessionPosition(shown, runtime)
     $('elapsed').textContent = clock(shown)
     $('duration').textContent = clock(runtime)
     $('seek').style.setProperty('--pct', `${runtime ? Math.min(100, (shown / runtime) * 100) : 0}%`)

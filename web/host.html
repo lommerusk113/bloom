@@ -97,6 +97,12 @@
                     <p id="passwordNote" class="muted small"></p>
                     <label class="check"><input id="guestControl" type="checkbox"> Guests may pause, seek and skip</label>
                 </div>
+                <div id="votePanel" class="panel" hidden>
+                    <h2>Vote</h2>
+                    <ol id="voteList" class="list"></ol>
+                    <p id="voteNote" class="muted small"></p>
+                    <div id="voteActions" class="row"></div>
+                </div>
                 <div class="panel">
                     <h2 id="nowHeading">Nothing playing</h2>
                     <div class="now">
@@ -114,6 +120,9 @@
                     <p id="emptyQueue" class="empty">Empty — pick something on the left.</p>
                     <h3>Watching</h3>
                     <p id="viewers" class="chips"></p>
+                    <h3>Activity</h3>
+                    <ol id="log" class="list log"></ol>
+                    <p id="emptyLog" class="empty">Who plays, pauses, seeks and skips shows up here.</p>
                 </div>
             </aside>
         </div>
