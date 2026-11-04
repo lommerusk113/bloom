@@ -697,12 +697,43 @@ if (frame) {
         $('manage').hidden = !isHost || !screenDoc.fullscreenElement
     })
 }
+// keyboard shortcuts, like Jellyfin's; never while typing
+const KEYS = {
+    Space: () => $('toggle').disabled || $('toggle').click(),
+    ArrowLeft: () => $('back').disabled || command({ type: 'seek', position: Math.max(0, currentTarget() - 10) }),
+    ArrowRight: () => $('forward').disabled || command({ type: 'seek', position: currentTarget() + 10 }),
+    ArrowUp: () => setVolume(video.volume + 0.1),
+    ArrowDown: () => setVolume(video.volume - 0.1),
+    KeyM: () => $('mute').click(),
+    KeyF: () => $('fullscreen').click(),
+    KeyP: () => $('pip').hidden || $('pip').click(),
+    KeyC: () => setChatOpen($('chat').hidden),
+}
 document.addEventListener('keydown', (event) => {
-    if (event.code === 'Space' && !['INPUT', 'SELECT', 'BUTTON'].includes(event.target.tagName) && !$('toggle').disabled) {
-        event.preventDefault()
-        $('toggle').click()
+    const typing = ['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target.tagName) || (event.code === 'Space' && event.target.tagName === 'BUTTON')
+    const action = KEYS[event.code]
+    if (!action || typing || event.ctrlKey || event.metaKey || event.altKey || !socket || $('player').hidden) {
+        return
     }
+    event.preventDefault()
+    action()
 })
+
+function setVolume(volume) {
+    video.volume = Math.min(Math.max(Math.round(volume * 20) / 20, 0), 1)
+    video.muted = video.volume === 0
+    store('wp_volume', String(video.volume))
+}
+
+// picture in picture: keeps playing in a small window over other apps
+$('pip').hidden = !document.pictureInPictureEnabled
+$('pip').onclick = () => {
+    if (document.pictureInPictureElement) {
+        document.exitPictureInPicture().catch(() => {})
+    } else {
+        video.requestPictureInPicture().catch(() => {})
+    }
+}
 
 function clock(seconds) {
     const s = Math.max(0, Math.floor(seconds))
@@ -757,6 +788,18 @@ function noteStall() {
     load(current.itemId, true)
 }
 
+/** A scheduled room: a big countdown until it starts by itself. */
+function showCountdown(room) {
+    const left = room.startsAt ? room.startsAt - socket.serverNow() : 0
+    $('countdown').hidden = left <= 0
+    if (left > 0) {
+        const s = Math.ceil(left / 1000)
+        const days = Math.floor(s / 86_400)
+        $('countdownTime').textContent = days ? `${days}d ${clock(s % 86_400)}` : clock(s)
+        $('countdownAt').textContent = new Date(room.startsAt).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    }
+}
+
 // --- chat: opens beside the video, Discord style, and stays in fullscreen ---
 
 let unread = 0
@@ -801,6 +844,24 @@ function addChatMessage(message, live = true) {
     who.className = 'who'
     who.textContent = message.name
     row.title = new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    if (message.position !== null && message.itemId) {
+        // where the movie was when it was said: tap to go back there
+        const at = document.createElement('button')
+        at.className = 'at'
+        at.type = 'button'
+        at.textContent = clock(message.position)
+        at.title = 'Jump here'
+        at.onclick = () => {
+            const room = state?.room
+            if (room?.queue[room.index]?.id === message.itemId && (isHost || room.guestControl)) {
+                command({ type: 'seek', position: message.position })
+            } else {
+                at.disabled = true
+                at.title = room?.queue[room.index]?.id === message.itemId ? 'Only the host can seek' : 'Sent during another title'
+            }
+        }
+        row.append(at)
+    }
     row.append(who, message.text)
     if (message.gif) {
         const img = document.createElement('img')
@@ -1115,6 +1176,7 @@ function syncNow() {
     showVoteTime()
     const waitingFor = state.waitingFor.filter(name => name !== myName)
     $('wait').textContent = room.waiting ? `Waiting for ${waitingFor.join(', ') || 'you'} to load…` : ''
+    showCountdown(room)
     // the counter shows this player's own position, so it stops while it loads
     const position = local && !video.seeking && !catchUp ? video.currentTime : target
     if (!dragging) {

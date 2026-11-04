@@ -16,6 +16,12 @@ export type Room = {
     waiting: boolean
     /** A poll on what to watch next; ballots map a viewer's connection id to the option they picked. */
     vote: Vote | null
+    /** When the last episode of the queue nears its end, queue the show's next episode. */
+    autoContinue: boolean
+    /** Jump over intros (from Jellyfin's media segments) without anyone pressing Skip. */
+    autoSkip: boolean
+    /** A scheduled start: the room starts playing by itself then, and isn't closed while empty before it. */
+    startsAt: number | null
 }
 
 export type Vote = { options: Array<{ id: string; name: string }>; ballots: Record<string, number>; endsAt: number }
@@ -30,12 +36,16 @@ export type Command =
     | { type: 'queueRemove'; index: number }
     | { type: 'queueMove'; from: number; to: number }
     | { type: 'setGuestControl'; value: boolean }
+    | { type: 'setAutoContinue'; value: boolean }
+    | { type: 'setAutoSkip'; value: boolean }
+    | { type: 'schedule'; at: number | null }
 
 export const ROOM_TTL_MS = 5 * 60_000
-const HOST_ONLY: ReadonlySet<Command['type']> = new Set(['queueAdd', 'queueRemove', 'queueMove', 'setGuestControl'])
+export const MAX_SCHEDULE_MS = 30 * 24 * 3600_000
+const HOST_ONLY: ReadonlySet<Command['type']> = new Set(['queueAdd', 'queueRemove', 'queueMove', 'setGuestControl', 'setAutoContinue', 'setAutoSkip', 'schedule'])
 
 export function createRoom(id: string, now: number, owner = '', name = 'Room'): Room {
-    return { id, name, owner, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true, waiting: false, vote: null }
+    return { id, name, owner, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true, waiting: false, vote: null, autoContinue: true, autoSkip: false, startsAt: null }
 }
 
 export function currentPosition(room: Room, now: number): number {
@@ -82,6 +92,18 @@ export function apply(room: Room, cmd: Command, isHost: boolean, now: number): b
         case 'setGuestControl':
             room.guestControl = cmd.value
             return true
+        case 'setAutoContinue':
+            room.autoContinue = cmd.value
+            return true
+        case 'setAutoSkip':
+            room.autoSkip = cmd.value
+            return true
+        case 'schedule':
+            if (cmd.at !== null && (cmd.at <= now || cmd.at > now + MAX_SCHEDULE_MS)) {
+                return false
+            }
+            room.startsAt = cmd.at
+            return true
     }
 }
 
@@ -107,6 +129,12 @@ export function describe(room: Room, cmd: Command): string {
             return `moved ${name(cmd.from)} in the queue`
         case 'setGuestControl':
             return cmd.value ? 'let guests control playback' : 'took back control of playback'
+        case 'setAutoContinue':
+            return cmd.value ? 'turned on auto-continue' : 'turned off auto-continue'
+        case 'setAutoSkip':
+            return cmd.value ? 'turned on auto-skip intros' : 'turned off auto-skip intros'
+        case 'schedule':
+            return cmd.at === null ? 'cancelled the scheduled start' : 'scheduled a start time'
     }
 }
 
@@ -134,6 +162,15 @@ export function playNext(room: Room, items: QueueItem[], now: number): boolean {
         jumpTo(room, current ? room.index + 1 : room.queue.length - items.length, now)
     }
     return true
+}
+
+/** Starts a scheduled room once its time has come; true when it started. */
+export function startIfScheduled(room: Room, now: number): boolean {
+    if (room.startsAt === null || now < room.startsAt) {
+        return false
+    }
+    room.startsAt = null
+    return setPlayback(room, true, currentPosition(room, now), now)
 }
 
 /** Moves to the next item once the current one has played to its runtime. */
@@ -164,7 +201,10 @@ export function sweepRooms(
         if (advanceIfEnded(room, now)) {
             advanced.push(room)
         }
-        const idle = viewerCount(room.id) === 0
+        if (startIfScheduled(room, now)) {
+            advanced.push(room)
+        }
+        const idle = viewerCount(room.id) === 0 && !(room.startsAt !== null && room.startsAt > now)
         if (!idle) {
             emptySince.delete(room.id)
             continue
@@ -205,7 +245,11 @@ export function parseCommand(input: unknown): Command | null {
                 ? { type: 'queueMove', from: c.from as number, to: c.to as number }
                 : null
         case 'setGuestControl':
-            return typeof c.value === 'boolean' ? { type: 'setGuestControl', value: c.value } : null
+        case 'setAutoContinue':
+        case 'setAutoSkip':
+            return typeof c.value === 'boolean' ? { type: c.type, value: c.value } : null
+        case 'schedule':
+            return c.at === null || finite(c.at) ? { type: 'schedule', at: c.at as number | null } : null
         default:
             return null
     }

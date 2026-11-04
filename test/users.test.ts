@@ -31,3 +31,16 @@ test('progress follows Jellyfin resume rules', () => {
     assert.deepEqual(userData(3000, 6000), { PlaybackPositionTicks: 30_000_000_000 })
     assert.deepEqual(userData(5900, 6000), { PlaybackPositionTicks: 0, Played: true })
 })
+
+test('watch history skips short visits and sums the month', async () => {
+    const { createHistory } = await import('../src/history.ts')
+    const dir = mkdtempSync(join(tmpdir(), 'bloom-history-'))
+    const history = createHistory(dir)
+    const now = 100 * 24 * 3600_000
+    history.add({ at: now - 60 * 24 * 3600_000, itemId: 'c', item: 'Cars', room: 'r', host: 'jo', viewers: ['jo'], seconds: 7200 }) // older than a month
+    history.add({ at: now - 1000, itemId: 'a', item: 'Alien', room: 'r', host: 'jo', viewers: ['jo', 'kim'], seconds: 3600 })
+    history.add({ at: now - 500, itemId: 'b', item: 'Brazil', room: 'r', host: 'jo', viewers: ['jo'], seconds: 30 }) // browsing
+    const summary = createHistory(dir).summary(now)
+    assert.deepEqual(summary.recent.map(e => e.item), ['Alien', 'Cars'])
+    assert.deepEqual(summary.month, { hours: 1, items: 1, topTitles: [{ name: 'Alien', value: 1 }], topViewers: [{ name: 'jo', value: 1 }, { name: 'kim', value: 1 }] })
+})

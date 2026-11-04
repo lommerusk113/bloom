@@ -29,6 +29,29 @@
     </section>
 
     <section class="panel">
+        <h2>Last 30 days</h2>
+        <div id="monthStats" class="stats"></div>
+        <div class="split">
+            <div>
+                <h3>Most watched</h3>
+                <ol id="topTitles" class="list"></ol>
+            </div>
+            <div>
+                <h3>Who watched most (hours)</h3>
+                <ol id="topViewers" class="list"></ol>
+            </div>
+        </div>
+        <h3>History</h3>
+        <div class="table-wrap">
+            <table class="table">
+                <thead><tr><th>When</th><th>What</th><th>Host</th><th>Watched by</th><th>Played</th></tr></thead>
+                <tbody id="history"></tbody>
+            </table>
+        </div>
+        <p id="noHistory" class="empty" hidden>Nothing watched yet. Items show up here once they've played for a minute.</p>
+    </section>
+
+    <section class="panel">
         <h2>Users</h2>
         <div class="table-wrap">
             <table class="table">

@@ -29,7 +29,7 @@ Bloom never encodes video itself. Every guest gets an HLS stream from Jellyfin (
    Nginx needs `proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`.
 
    The example compose file publishes port 8080 on `127.0.0.1` only, so it is reachable from a reverse proxy on the same host (`localhost:8080`) or on the same Docker network (`bloom:8080`), never directly from outside.
-   The container runs read-only with all capabilities dropped; only login sessions are written, to the `bloom-data` volume (`/data/sessions.json`). Rooms live in memory.
+   The container runs read-only with all capabilities dropped; only login sessions and watch history are written, to the `bloom-data` volume (`/data/sessions.json`, `/data/history.json`). Rooms live in memory.
 
 | Env var | Required | Meaning |
 |---|---|---|

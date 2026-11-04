@@ -157,3 +157,18 @@ test('a vote winner plays next, or right away when nothing is on', () => {
     playNext(room, [b], 200_000)
     assert.deepEqual([room.index, room.queue[room.index].id, room.playing], [3, 'b', true])
 })
+
+test('a scheduled room starts by itself and is kept while it waits', () => {
+    const rooms = new Map([['r1', createRoom('r1', 0)]])
+    const room = rooms.get('r1')!
+    apply(room, { type: 'queueAdd', items: [{ id: 'a', name: 'A', runtime: 100 }] }, true, 0)
+    assert.equal(apply(room, { type: 'schedule', at: -5 }, true, 0), false) // in the past
+    assert.equal(apply(room, { type: 'schedule', at: ROOM_TTL_MS * 3 }, true, 0), true)
+    assert.equal(apply(room, { type: 'schedule', at: null }, false, 0), false) // host only
+    const emptySince = new Map<string, number>()
+    sweepRooms(rooms, () => 0, emptySince, 0)
+    sweepRooms(rooms, () => 0, emptySince, ROOM_TTL_MS * 2) // empty, but its start is still ahead
+    assert.equal(rooms.has('r1'), true)
+    const { advanced } = sweepRooms(rooms, () => 0, emptySince, ROOM_TTL_MS * 3)
+    assert.deepEqual([advanced.length, room.playing, room.startsAt], [1, true, null])
+})

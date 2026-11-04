@@ -188,6 +188,21 @@ function manage(room) {
     $('toggle').onclick = () => command({ type: state.room.playing ? 'pause' : 'play' })
     $('next').onclick = () => command({ type: 'next' })
     $('guestControl').onchange = () => command({ type: 'setGuestControl', value: $('guestControl').checked })
+    $('autoContinue').onchange = () => command({ type: 'setAutoContinue', value: $('autoContinue').checked })
+    $('autoSkip').onchange = () => command({ type: 'setAutoSkip', value: $('autoSkip').checked })
+    $('scheduleForm').onsubmit = (event) => {
+        event.preventDefault()
+        if (state?.room.startsAt) {
+            command({ type: 'schedule', at: null })
+            return
+        }
+        const at = new Date($('startsAt').value).getTime() // datetime-local is read as local time
+        if (!Number.isFinite(at) || at <= Date.now()) {
+            showStatus('Pick a time in the future')
+            return
+        }
+        command({ type: 'schedule', at })
+    }
     $('searchForm').onsubmit = (event) => {
         event.preventDefault()
         const term = $('q').value
@@ -555,7 +570,28 @@ function card(trail, i) {
     return tile
 }
 
+/** A time as datetime-local's value, in this browser's time zone. */
+function toLocalInput(ms) {
+    const d = new Date(ms)
+    return new Date(ms - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+}
+
+function renderSchedule() {
+    const at = state?.room.startsAt
+    $('scheduleNote').textContent = at
+        ? `Starts ${new Date(at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · in ${until(at - socket.serverNow())}. Guests who open the link see a countdown, and the room stays open until then.`
+        : 'Optional: pick a start time and the room starts playing by itself.'
+}
+
+function until(ms) {
+    const minutes = Math.max(0, Math.ceil(ms / 60_000))
+    const days = Math.floor(minutes / 1440)
+    const hours = Math.floor(minutes / 60) % 24
+    return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`
+}
+
 function renderTime() {
+    renderSchedule()
     if (state?.room.vote) {
         renderVote() // its countdown
     }
@@ -574,6 +610,13 @@ function render() {
     renderVote()
     const item = room.queue[room.index]
     $('guestControl').checked = room.guestControl
+    $('autoContinue').checked = room.autoContinue
+    $('autoSkip').checked = room.autoSkip
+    $('startsAt').disabled = Boolean(room.startsAt)
+    $('saveSchedule').textContent = room.startsAt ? 'Cancel' : 'Schedule'
+    if (room.startsAt) {
+        $('startsAt').value = toLocalInput(room.startsAt)
+    }
     $('nowHeading').textContent = !item ? 'Nothing playing' : room.waiting ? 'Loading…' : room.playing ? 'Now playing' : 'Paused'
     $('nowTitle').textContent = item?.name ?? 'Queue is empty'
     $('toggle').disabled = !item

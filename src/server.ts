@@ -5,7 +5,8 @@ import { extname, join } from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createAuth } from './auth.ts'
 import { createUsers, type Account } from './users.ts'
-import { createJellyfin, type Card } from './jellyfin.ts'
+import { createHistory } from './history.ts'
+import { createJellyfin, type Card, type Segment } from './jellyfin.ts'
 import { createTmdb, type TmdbType } from './tmdb.ts'
 import { activeStreams, proxyRequest, readBody, stopRoomStreams } from './proxy.ts'
 import { apply, createRoom, currentPosition, describe, parseCommand, playNext, voteWinner, setWaiting, sweepRooms, type Room } from './room.ts'
@@ -50,7 +51,9 @@ const PUBLIC_URL = withScheme(process.env.PUBLIC_URL || `http://localhost:${PORT
 const PUBLIC_HOST = new URL(PUBLIC_URL).host
 const jf = createJellyfin(required('JELLYFIN_URL').replace(/\/$/, ''), required('JELLYFIN_API_KEY'), process.env.JELLYFIN_USER_ID || undefined)
 const SECURE = PUBLIC_URL.startsWith('https:')
-const users = createUsers(process.env.DATA_DIR || join(import.meta.dirname, '..', 'data'), SECURE, (name, password) => jf.authenticate(name, password))
+const DATA_DIR = process.env.DATA_DIR || join(import.meta.dirname, '..', 'data')
+const users = createUsers(DATA_DIR, SECURE, (name, password) => jf.authenticate(name, password))
+const history = createHistory(DATA_DIR)
 const STARTED_AT = Date.now()
 /** Random bytes viewers download to measure their speed; random so no proxy can compress them. */
 const SPEED_TEST = randomBytes(4_000_000)
@@ -67,7 +70,8 @@ const emptySince = new Map<string, number>()
 /** Per room: who did what, newest last; only its host sees it. */
 const logs = new Map<string, Array<{ at: number; name: string; text: string }>>()
 const LOG_SIZE = 100
-type ChatMessage = { at: number; name: string; text: string; gif: { url: string; width: number; height: number } | null }
+/** position: where the room was in itemId when it was sent, so viewers can jump back to it. */
+type ChatMessage = { at: number; name: string; text: string; gif: { url: string; width: number; height: number } | null; itemId: string | null; position: number | null }
 /** Per room: the latest chat messages, for viewers who join later. */
 const chats = new Map<string, ChatMessage[]>()
 const pendingBroadcasts = new Set<Room>()
@@ -144,10 +148,11 @@ function sendState(room: Room): void {
 }
 
 /** Adds to the room's activity log and sends the log to the host's pages. */
-function logAction(room: Room, client: Client, text: string): void {
+function logAction(room: Room, client: Client | 'Bloom', text: string): void {
     const log = logs.get(room.id) ?? []
     logs.set(room.id, log)
-    log.push({ at: Date.now(), name: client.isHost ? `${client.name} (host)` : client.name, text })
+    const name = client === 'Bloom' ? 'Bloom' : client.isHost ? `${client.name} (host)` : client.name
+    log.push({ at: Date.now(), name, text })
     log.splice(0, log.length - LOG_SIZE)
     sendLog(room)
 }
@@ -203,6 +208,7 @@ function overview() {
     const now = Date.now()
     const names = new Map(accounts.map(u => [u.id, u.name]))
     return {
+        history: history.summary(now),
         server: { startedAt: STARTED_AT, now, jellyfin: { error: jellyfinError, name: jellyfinInfo?.ServerName ?? '', version: jellyfinInfo?.Version ?? '' }, tmdb: tmdb !== null },
         users: accounts.map(u => ({ ...u, lastLogin: users.lastLogin(u.id), rooms: [...rooms.values()].filter(r => r.owner === u.id).length })),
         rooms: [...rooms.values()].map(room => ({
@@ -511,6 +517,8 @@ const server = createServer((req, res) => {
 async function endRoom(room: Room): Promise<void> {
 
     saveProgress(room, true)
+    saveWatched(room.id)
+    forgetRoom(room.id)
     rooms.delete(room.id)
     emptySince.delete(room.id)
     locks.delete(room.id)
@@ -709,7 +717,7 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
             return
         }
         case 'chat': {
-            const message = chatMessage(client, msg, now)
+            const message = chatMessage(client, room, msg, now)
             if (!message) {
                 return
             }
@@ -777,7 +785,7 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
 }
 
 /** A validated chat message, or null for an empty, flooding or malformed one. */
-function chatMessage(client: Client, msg: Record<string, unknown>, now: number): ChatMessage | null {
+function chatMessage(client: Client, room: Room, msg: Record<string, unknown>, now: number): ChatMessage | null {
 
     if (client.observer || now - client.lastChat < CHAT_GAP_MS) {
         return null
@@ -792,7 +800,8 @@ function chatMessage(client: Client, msg: Record<string, unknown>, now: number):
     }
     client.lastChat = now
 
-    return { at: now, name: client.name, text, gif }
+    const item = room.queue[room.index]
+    return { at: now, name: client.name, text, gif, itemId: item?.id ?? null, position: item ? Math.floor(currentPosition(room, now)) : null }
 }
 
 /** GIPHY search, or what's trending for an empty term; [] without a GIPHY_API_KEY. */
@@ -831,6 +840,98 @@ async function finishVote(room: Room): Promise<void> {
 
 // --- background loops ---
 
+/** Per room: the item being watched, seconds it actually played and everyone who saw it, until it's saved to history. */
+const watching = new Map<string, { itemId: string; item: string; room: string; host: string; startedAt: number; seconds: number; viewers: Set<string> }>()
+
+/** Called every second: counts played seconds and saves the previous item to history when the item changes. */
+function trackWatching(room: Room): void {
+    const item = room.queue[room.index]
+    if (watching.get(room.id)?.itemId !== item?.id) {
+        saveWatched(room.id)
+    }
+    if (!item) {
+        return
+    }
+    const entry = watching.get(room.id) ?? { itemId: item.id, item: item.name, room: room.name, host: accounts.find(a => a.id === room.owner)?.name ?? '', startedAt: Date.now(), seconds: 0, viewers: new Set<string>() }
+    watching.set(room.id, entry)
+    const viewers = viewersOf(room)
+    if (room.playing && !room.waiting && viewers.length > 0) {
+        entry.seconds++
+        viewers.forEach(c => entry.viewers.add(c.name))
+    }
+}
+
+function saveWatched(roomId: string): void {
+    const entry = watching.get(roomId)
+    watching.delete(roomId)
+    if (entry) {
+        history.add({ at: entry.startedAt, itemId: entry.itemId, item: entry.item, room: entry.room, host: entry.host, viewers: [...entry.viewers], seconds: entry.seconds })
+    }
+}
+
+/** Items whose next episode was already looked up, so it's queued once. */
+const continued = new Set<string>()
+const CONTINUE_BEFORE_END_S = 90
+
+/** Near the end of the queue's last item, queues the show's next episode: the up-next countdown then shows it. */
+function continueShow(room: Room): void {
+    const item = room.queue[room.index]
+    const key = `${room.id}:${room.index}:${item?.id}`
+    if (!room.autoContinue || !item || !room.playing || room.index !== room.queue.length - 1 || continued.has(key)
+        || item.runtime - currentPosition(room, Date.now()) > CONTINUE_BEFORE_END_S) {
+        return
+    }
+    continued.add(key)
+    jf.nextEpisode(item.id).then((next) => {
+        if (next && rooms.get(room.id) === room && room.queue.length - 1 === room.index && room.queue[room.index] === item) {
+            room.queue.push(next)
+            logAction(room, 'Bloom', `queued the next episode, ${next.name}`)
+            broadcast(room)
+        }
+    }).catch(err => console.error('Next episode lookup failed:', err.message))
+}
+
+/** Drops a deleted room's once-per-item markers. */
+function forgetRoom(roomId: string): void {
+    for (const set of [continued, skipped]) {
+        for (const key of set) {
+            if (key.startsWith(`${roomId}:`)) {
+                set.delete(key)
+            }
+        }
+    }
+}
+
+/** Intro segments per item; null while being fetched. */
+const segmentCache = new Map<string, Segment[] | null>()
+const skipped = new Set<string>()
+
+/** With auto-skip on, jumps over an intro once per item; seeking back into it afterwards is left alone. */
+function skipIntro(room: Room): void {
+    const item = room.queue[room.index]
+    if (!room.autoSkip || !item || !room.playing || room.waiting) {
+        return
+    }
+    if (!segmentCache.has(item.id)) {
+        if (segmentCache.size > 200) {
+            segmentCache.clear() // ponytail: crude bound; also picks up intros Intro Skipper found since
+        }
+        segmentCache.set(item.id, null)
+        jf.segments(item.id).then(s => segmentCache.set(item.id, s), () => segmentCache.set(item.id, []))
+        return
+    }
+    const position = currentPosition(room, Date.now())
+    const intro = segmentCache.get(item.id)?.find(s => s.type === 'Intro' && position >= s.start && position < s.end - 2)
+    const key = `${room.id}:${room.index}:${item.id}`
+    if (!intro || skipped.has(key)) {
+        return
+    }
+    skipped.add(key)
+    apply(room, { type: 'seek', position: intro.end }, true, Date.now())
+    logAction(room, 'Bloom', 'skipped the intro')
+    broadcast(room)
+}
+
 setInterval(() => {
     const { advanced, deleted } = sweepRooms(rooms, id => clients.get(id)?.size ?? 0, emptySince, Date.now())
     advanced.forEach(broadcast)
@@ -839,8 +940,13 @@ setInterval(() => {
         if (room.vote && Date.now() >= room.vote.endsAt) {
             finishVote(room).catch(err => console.error('Vote failed:', err.message))
         }
+        trackWatching(room)
+        continueShow(room)
+        skipIntro(room)
     }
     for (const id of deleted) {
+        saveWatched(id)
+        forgetRoom(id)
         clients.delete(id)
         locks.delete(id)
         logs.delete(id)

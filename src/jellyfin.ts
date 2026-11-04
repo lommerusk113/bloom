@@ -8,6 +8,7 @@ type JfItem = {
     Name: string
     Type: string
     SeriesName?: string
+    SeriesId?: string
     ParentIndexNumber?: number
     IndexNumber?: number
     RunTimeTicks?: number
@@ -214,6 +215,17 @@ export function createJellyfin(baseUrl: string, apiKey: string, userId?: string)
             const res = await json<{ Items: Array<{ Type: string; StartTicks: number; EndTicks: number }> }>(`/MediaSegments/${encodeURIComponent(itemId)}`)
             return res.Items.filter(s => SKIPPABLE.has(s.Type))
                 .map(s => ({ type: s.Type, start: s.StartTicks / TICKS_PER_SECOND, end: s.EndTicks / TICKS_PER_SECOND }))
+        },
+
+        /** The episode after this one in its show, or null for a movie or a show's last episode. */
+        async nextEpisode(itemId: string): Promise<QueueItem | null> {
+            const item = (await listItems(new URLSearchParams({ Ids: itemId }))).Items[0]
+            if (item?.Type !== 'Episode' || !item.SeriesId) {
+                return null
+            }
+            const query = new URLSearchParams({ userId: user ?? '', startItemId: item.Id, Limit: '2', IsMissing: 'false' })
+            const next = (await json<{ Items: JfItem[] }>(`/Shows/${encodeURIComponent(item.SeriesId)}/Episodes?${query}`)).Items[1]
+            return next ? { id: next.Id, name: label(next), runtime: (next.RunTimeTicks ?? 0) / TICKS_PER_SECOND } : null
         },
 
         /** Resolves a movie/episode to itself and a series/season to its episodes in order. */

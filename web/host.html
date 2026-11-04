@@ -96,6 +96,13 @@
                     </form>
                     <p id="passwordNote" class="muted small"></p>
                     <label class="check"><input id="guestControl" type="checkbox"> Guests may pause, seek and skip</label>
+                    <label class="check"><input id="autoContinue" type="checkbox"> Auto-continue shows with the next episode</label>
+                    <label class="check"><input id="autoSkip" type="checkbox"> Auto-skip intros</label>
+                    <form id="scheduleForm" class="row">
+                        <input id="startsAt" type="datetime-local" aria-label="Scheduled start">
+                        <button id="saveSchedule">Schedule</button>
+                    </form>
+                    <p id="scheduleNote" class="muted small"></p>
                 </div>
                 <div id="votePanel" class="panel" hidden>
                     <h2>Vote</h2>

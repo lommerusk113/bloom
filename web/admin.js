@@ -72,7 +72,25 @@ function tag(text, kind = '') {
     return el('span', `tag ${kind}`, text)
 }
 
-function render({ server, rooms, users }) {
+const minutes = (seconds) => seconds >= 3600 ? `${Math.floor(seconds / 3600)} h ${Math.round(seconds / 60) % 60} min` : `${Math.round(seconds / 60)} min`
+
+function renderHistory({ recent, month }, now) {
+    $('monthStats').replaceChildren(stat(month.hours, 'hours watched'), stat(month.items, 'titles played'))
+    const ranked = (list, unit) => list.length ? list.map(e => { const li = el('li'); li.append(el('span', 'grow', e.name), el('span', 'muted', `${e.value}${unit}`)); return li }) : [el('li', 'muted', 'Nothing yet')]
+    $('topTitles').replaceChildren(...ranked(month.topTitles, '×'))
+    $('topViewers').replaceChildren(...ranked(month.topViewers, ' h'))
+    $('noHistory').hidden = recent.length > 0
+    $('history').replaceChildren(...recent.map(e => row(
+        el('span', '', `${new Date(e.at).toLocaleDateString([], { day: 'numeric', month: 'short' })} ${new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`),
+        el('strong', '', e.item),
+        e.host || el('span', 'muted', '—'),
+        e.viewers.join(', ') || el('span', 'muted', '—'),
+        minutes(e.seconds),
+    )))
+}
+
+function render({ server, rooms, users, history }) {
+    renderHistory(history, server.now)
     const viewers = rooms.reduce((sum, r) => sum + r.viewers.length, 0)
     const streams = rooms.reduce((sum, r) => sum + r.streams, 0)
     const jf = server.jellyfin
