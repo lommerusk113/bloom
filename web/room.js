@@ -927,6 +927,7 @@ async function searchGifs(term) {
 }
 $('gifButton').onclick = () => {
     $('gifPicker').hidden = !$('gifPicker').hidden
+    $('suggestPicker').hidden = true
     if (!$('gifPicker').hidden) {
         $('gifSearch').value = ''
         $('gifSearch').focus()
@@ -941,6 +942,50 @@ $('gifSearch').oninput = () => {
 $('gifSearch').onkeydown = (event) => {
     if (event.key === 'Enter') {
         event.preventDefault() // not a chat send
+    }
+}
+
+// --- suggesting a title from the library: it shows in chat and on the host's page ---
+
+$('suggestButton').onclick = () => {
+    $('suggestPicker').hidden = !$('suggestPicker').hidden
+    $('gifPicker').hidden = true
+    if (!$('suggestPicker').hidden) {
+        $('suggestSearch').focus()
+    }
+}
+let suggestTimer = 0
+let suggestToken = 0
+$('suggestSearch').oninput = () => {
+    clearTimeout(suggestTimer)
+    suggestTimer = setTimeout(async () => {
+        const token = ++suggestToken
+        const term = $('suggestSearch').value.trim()
+        const res = term ? await fetch(`/r/${roomId}/search?q=${encodeURIComponent(term)}`).catch(() => null) : null
+        const found = res?.ok ? await res.json() : []
+        if (token !== suggestToken) {
+            return
+        }
+        $('suggestResults').replaceChildren(...found.map((card) => {
+            const pick = document.createElement('button')
+            pick.type = 'button'
+            const title = document.createElement('span')
+            title.textContent = card.title
+            const sub = document.createElement('small')
+            sub.textContent = [card.type === 'Series' ? 'Show' : 'Movie', card.subtitle].filter(Boolean).join(' · ')
+            pick.append(title, sub)
+            pick.onclick = () => {
+                socket.send({ type: 'suggest', itemId: card.id })
+                pick.disabled = true
+                title.textContent = `✓ Suggested ${card.title}`
+            }
+            return listItem('', pick)
+        }))
+    }, 300)
+}
+$('suggestSearch').onkeydown = (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault()
     }
 }
 

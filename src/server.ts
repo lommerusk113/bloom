@@ -6,6 +6,7 @@ import WebSocket, { WebSocketServer } from 'ws'
 import { createAuth } from './auth.ts'
 import { createUsers, type Account } from './users.ts'
 import { createHistory } from './history.ts'
+import { loadJson, saveJson } from './store.ts'
 import { createJellyfin, type Card, type Segment } from './jellyfin.ts'
 import { createTmdb, type TmdbType } from './tmdb.ts'
 import { activeStreams, proxyRequest, readBody, stopRoomStreams } from './proxy.ts'
@@ -30,6 +31,7 @@ const GIPHY_MEDIA = /^https:\/\/media\d*\.giphy\.com\/media\/[\w./?=&-]+$/
 const REACTION_GAP_MS = 300
 const VOTE_MS = 60_000
 const ITEM_ID = /^[0-9a-f-]{32,36}$/i
+const MAX_SUGGESTIONS = 20
 const MAX_CLIENTS_PER_ROOM = 50
 /** A client this far behind on reading is dropped rather than buffering every state for it. */
 const MAX_BUFFERED_BYTES = 1_000_000
@@ -43,6 +45,8 @@ const CONTENT_TYPES: Record<string, string> = {
     '.js': 'text/javascript; charset=utf-8',
     '.css': 'text/css; charset=utf-8',
     '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.webmanifest': 'application/manifest+json',
 }
 
 const PORT = Number(process.env.PORT ?? 8080)
@@ -61,6 +65,7 @@ const SPEED_TEST_REPEATS = 10
 const LANGUAGE = /^[a-z]{3}$/
 const tmdb = process.env.TMDB_API_KEY ? createTmdb(process.env.TMDB_API_KEY) : null
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY || ''
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || ''
 /** Room passwords, kept out of Room so they are never broadcast. */
 const locks = new Map<string, { password: string; auth: ReturnType<typeof createAuth> }>()
 
@@ -248,7 +253,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         return proxyRequest(req, res, room, proxied[2] + url.search, jf)
     }
 
-    const roomTool = /^\/r\/([\w-]+)\/(speedtest|subtitles|segments|poster|gifs)$/.exec(path)
+    const roomTool = /^\/r\/([\w-]+)\/(speedtest|subtitles|segments|poster|gifs|search)$/.exec(path)
     if (roomTool) {
         const room = rooms.get(roomTool[1])
         if (!room) {
@@ -280,6 +285,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             res.end(Buffer.from(await image.arrayBuffer()))
             return
         }
+        if (roomTool[2] === 'search') {
+            // guests search the library to suggest something; only what a card shows
+            const term = (url.searchParams.get('q') ?? '').trim().slice(0, 100)
+            return sendJson(res, 200, term ? (await jf.search(term)).filter(c => c.type !== 'Episode').slice(0, 20) : [])
+        }
         if (roomTool[2] === 'gifs') {
             return sendJson(res, 200, await searchGifs(url.searchParams.get('q') ?? ''))
         }
@@ -300,7 +310,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         if (path === '/vendor/hls.min.js') {
             return sendFile(res, HLS_JS)
         }
-        const asset = /^\/web\/([\w-]+\.(?:js|css|html|svg))$/.exec(path)
+        const asset = /^\/web\/([\w-]+\.(?:js|css|html|svg|png|webmanifest))$/.exec(path)
         if (asset) {
             return sendFile(res, join(WEB_DIR, asset[1]))
         }
@@ -435,6 +445,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         res.writeHead(200, { 'content-type': image.headers.get('content-type') ?? 'image/jpeg', 'cache-control': 'private, max-age=86400' })
         res.end(Buffer.from(await image.arrayBuffer()))
         return
+    }
+    if (path === '/api/watchlist' || path.startsWith('/api/watchlist/')) {
+        return watchlistApi(req, res, user, method, path)
     }
     if (method === 'GET' && path === '/api/resume') {
         return sendJson(res, 200, await jf.resume(user.id))
@@ -577,7 +590,7 @@ function onJoin(ws: WebSocket, room: Room, isHost: boolean): void {
     ws.on('pong', () => alive.add(ws))
     // oversized or malformed frames emit 'error'; unhandled it would crash the process
     ws.on('error', () => ws.terminate())
-    send(client, JSON.stringify({ type: 'welcome', isHost, id: client.id, gifs: GIPHY_API_KEY !== '', chat: chats.get(room.id) ?? [] }))
+    send(client, JSON.stringify({ type: 'welcome', isHost, id: client.id, gifs: GIPHY_API_KEY !== '', discord: DISCORD_WEBHOOK_URL !== '', chat: chats.get(room.id) ?? [] }))
     sendLog(room, client)
     broadcast(room)
 
@@ -680,6 +693,11 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
                 return
             }
             logAction(room, client, text!)
+            if (cmd.type === 'setAnnounce' && cmd.value) {
+                announceRoom(room)
+            } else if (cmd.type === 'schedule' && cmd.at !== null) {
+                announce(room, `📅 **${room.name}** starts <t:${Math.floor(cmd.at / 1000)}:F> (<t:${Math.floor(cmd.at / 1000)}:R>)`)
+            }
             updateWaiting(room, now)
             break
         }
@@ -721,16 +739,30 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
             if (!message) {
                 return
             }
-            const chat = chats.get(room.id) ?? []
-            chats.set(room.id, chat)
-            chat.push(message)
-            chat.splice(0, chat.length - CHAT_HISTORY)
-            const data = JSON.stringify({ type: 'chat', message })
-            for (const other of clients.get(room.id) ?? []) {
-                send(other, data)
-            }
+            postChat(room, message)
             return
         }
+        case 'suggest': {
+            const id = String(msg.itemId ?? '')
+            if (client.observer || !ITEM_ID.test(id) || now - client.lastChat < CHAT_GAP_MS || room.suggestions.some(s => s.id === id)) {
+                return
+            }
+            client.lastChat = now
+            const details = await jf.details(id)
+            if (!details) {
+                return
+            }
+            room.suggestions.push({ id, name: details.name, by: client.name })
+            room.suggestions.splice(0, room.suggestions.length - MAX_SUGGESTIONS)
+            postChat(room, { at: now, name: client.name, text: `💡 suggested ${details.name}`, gif: null, itemId: null, position: null })
+            break
+        }
+        case 'dismissSuggestion':
+            if (!client.isHost) {
+                return
+            }
+            room.suggestions = room.suggestions.filter(s => s.id !== msg.itemId)
+            break
         case 'voteStart': {
             if (!client.isHost) {
                 return
@@ -784,6 +816,17 @@ async function onMessage(client: Client, room: Room, msg: Record<string, unknown
     broadcast(room)
 }
 
+function postChat(room: Room, message: ChatMessage): void {
+    const chat = chats.get(room.id) ?? []
+    chats.set(room.id, chat)
+    chat.push(message)
+    chat.splice(0, chat.length - CHAT_HISTORY)
+    const data = JSON.stringify({ type: 'chat', message })
+    for (const client of clients.get(room.id) ?? []) {
+        send(client, data)
+    }
+}
+
 /** A validated chat message, or null for an empty, flooding or malformed one. */
 function chatMessage(client: Client, room: Room, msg: Record<string, unknown>, now: number): ChatMessage | null {
 
@@ -822,6 +865,42 @@ async function searchGifs(term: string): Promise<Array<{ url: string; preview: s
     const { data } = await res.json() as { data: Array<{ title: string; images: { fixed_height: Image; fixed_height_small: Image } }> }
 
     return data.map(g => ({ url: g.images.fixed_height.url, preview: g.images.fixed_height_small.url, width: Number(g.images.fixed_height.width), height: Number(g.images.fixed_height.height), title: g.title }))
+}
+
+// --- the shared watchlist: one "we should watch this" list for everyone with an account ---
+
+type WatchlistEntry = Card & { addedBy: string; at: number }
+const WATCHLIST_FILE = join(DATA_DIR, 'watchlist.json')
+const watchlist = loadJson<WatchlistEntry[]>(WATCHLIST_FILE, [])
+const MAX_WATCHLIST = 500
+
+async function watchlistApi(req: IncomingMessage, res: ServerResponse, user: Account, method: string, path: string): Promise<void> {
+
+    if (method === 'GET' && path === '/api/watchlist') {
+        return sendJson(res, 200, watchlist.toReversed())
+    }
+    if (method === 'POST' && path === '/api/watchlist') {
+        const id = String((await readJson(req)).id ?? '')
+        const details = ITEM_ID.test(id) && !watchlist.some(e => e.id === id) ? await jf.details(id) : null
+        if (details) {
+            const { id: itemId, name, type, title, subtitle, rating } = details
+            watchlist.push({ id: itemId, name, type, title, subtitle, rating, addedBy: user.name, at: Date.now() })
+            watchlist.splice(0, watchlist.length - MAX_WATCHLIST)
+            saveJson(WATCHLIST_FILE, watchlist)
+        }
+        return sendJson(res, 200, { ok: true })
+    }
+    const entry = /^\/api\/watchlist\/([\w-]+)$/.exec(path)
+    if (method === 'DELETE' && entry) {
+        const index = watchlist.findIndex(e => e.id === entry[1])
+        if (index >= 0) {
+            watchlist.splice(index, 1)
+            saveJson(WATCHLIST_FILE, watchlist)
+        }
+        return sendJson(res, 200, { ok: true })
+    }
+
+    return sendJson(res, 404, { error: 'Not found' })
 }
 
 /** Closes the room's vote: the winner plays next, or right away when nothing is on. */
@@ -891,6 +970,118 @@ function continueShow(room: Room): void {
     }).catch(err => console.error('Next episode lookup failed:', err.message))
 }
 
+// --- Discord: a webhook post when a room with announcements on opens, is scheduled, or starts something ---
+
+const announced = new Map<string, string>() // room id -> item last announced as playing
+
+/** Posts to the Discord webhook; mentions are disabled so a title can't ping @everyone. */
+function announce(room: Room, text: string): void {
+    if (!DISCORD_WEBHOOK_URL || !room.announce) {
+        return
+    }
+    fetch(DISCORD_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'Bloom', content: `${text}\nJoin: ${PUBLIC_URL}/r/${room.id}`, allowed_mentions: { parse: [] } }),
+        signal: AbortSignal.timeout(8000),
+    }).then((res) => {
+        if (!res.ok) {
+            console.error(`Discord webhook: ${res.status}`)
+        }
+    }, err => console.error('Discord webhook failed:', err.message))
+}
+
+function announceRoom(room: Room): void {
+    const item = room.queue[room.index]
+    const lines = [`🎬 **${room.name}** is open${item ? ` · ${room.playing ? 'playing' : 'up first'}: **${item.name}**` : ''}`]
+    if (room.startsAt) {
+        lines.push(`Starts <t:${Math.floor(room.startsAt / 1000)}:F> (<t:${Math.floor(room.startsAt / 1000)}:R>)`)
+    }
+    announced.set(room.id, item?.id ?? '')
+    announce(room, lines.join('\n'))
+}
+
+/** Each new item that starts playing, once. */
+function announceNowPlaying(room: Room): void {
+    const item = room.queue[room.index]
+    if (!room.announce || !item || !room.playing || announced.get(room.id) === item.id) {
+        return
+    }
+    announced.set(room.id, item.id)
+    announce(room, `▶️ Now playing in **${room.name}**: **${item.name}**`)
+}
+
+/** Per room: since when it has been playing with nobody watching. */
+const unwatchedSince = new Map<string, number>()
+const UNWATCHED_PAUSE_MS = 30_000
+
+/**
+ * A room nobody watches pauses after a grace period for reconnects, and its transcodes stop:
+ * nothing plays on, queues the next episode, or holds Jellyfin until the show is done.
+ */
+function pauseIfUnwatched(room: Room): void {
+    const now = Date.now()
+    if (!room.playing || viewersOf(room).length > 0) {
+        unwatchedSince.delete(room.id)
+        return
+    }
+    const since = unwatchedSince.get(room.id) ?? now
+    unwatchedSince.set(room.id, since)
+    if (now - since < UNWATCHED_PAUSE_MS) {
+        return
+    }
+    unwatchedSince.delete(room.id)
+    apply(room, { type: 'pause' }, true, now)
+    logAction(room, 'Bloom', 'paused: nobody was watching')
+    stopRoomStreams(room, jf).catch(() => {})
+    broadcast(room)
+}
+
+// --- rooms survive restarts: a snapshot in the data volume ---
+
+const ROOMS_FILE = join(DATA_DIR, 'rooms.json')
+let savedRooms = ''
+
+/** Writes the rooms and their passwords when they changed (always on shutdown); called every few seconds. */
+function saveRooms(force = false): void {
+    const snapshot = JSON.stringify({ rooms: [...rooms.values()], passwords: Object.fromEntries([...locks].map(([id, lock]) => [id, lock.password])) })
+    if (force || snapshot !== savedRooms) {
+        saveJson(ROOMS_FILE, { ...JSON.parse(snapshot), savedAt: Date.now() })
+        savedRooms = snapshot
+    }
+}
+
+function loadRooms(): void {
+    const now = Date.now()
+    const saved = loadJson<{ rooms: Room[]; passwords: Record<string, string>; savedAt: number }>(ROOMS_FILE, { rooms: [], passwords: {}, savedAt: now })
+    for (const stored of saved.rooms) {
+        // defaults first: a room saved by an older version gets newer fields
+        const room = { ...createRoom(stored.id, now, stored.owner, stored.name), ...stored, vote: null, waiting: false }
+        // pick up where it was when saved, not where the clock ran on to while the server was down
+        room.position = Math.min(currentPosition(room, saved.savedAt), room.queue[room.index]?.runtime || Infinity)
+        room.updatedAt = now
+        rooms.set(room.id, room)
+        emptySince.set(room.id, now) // the usual 5 minutes for its viewers to reconnect
+        announced.set(room.id, room.queue[room.index]?.id ?? '') // already announced before the restart
+        const password = saved.passwords[room.id]
+        if (password) {
+            locks.set(room.id, { password, auth: createAuth(password, SECURE, `wp_room_${room.id}`) })
+        }
+    }
+    if (saved.rooms.length) {
+        console.log(`Restored ${saved.rooms.length} room(s)`)
+    }
+}
+
+loadRooms()
+setInterval(saveRooms, 5000)
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(signal, () => {
+        saveRooms(true)
+        process.exit(0)
+    })
+}
+
 /** Drops a deleted room's once-per-item markers. */
 function forgetRoom(roomId: string): void {
     for (const set of [continued, skipped]) {
@@ -943,10 +1134,14 @@ setInterval(() => {
         trackWatching(room)
         continueShow(room)
         skipIntro(room)
+        pauseIfUnwatched(room)
+        announceNowPlaying(room)
     }
     for (const id of deleted) {
         saveWatched(id)
         forgetRoom(id)
+        unwatchedSince.delete(id)
+        announced.delete(id)
         clients.delete(id)
         locks.delete(id)
         logs.delete(id)

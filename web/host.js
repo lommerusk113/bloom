@@ -172,6 +172,7 @@ function manage(room) {
     socket = connectRoom(roomId, 'Host', (msg) => {
         if (msg.type === 'welcome') {
             showStatus('')
+            $('announceRow').hidden = !msg.discord
         } else if (msg.type === 'error') {
             showStatus(msg.message)
         } else if (msg.type === 'gone') {
@@ -190,6 +191,7 @@ function manage(room) {
     $('guestControl').onchange = () => command({ type: 'setGuestControl', value: $('guestControl').checked })
     $('autoContinue').onchange = () => command({ type: 'setAutoContinue', value: $('autoContinue').checked })
     $('autoSkip').onchange = () => command({ type: 'setAutoSkip', value: $('autoSkip').checked })
+    $('announce').onchange = () => command({ type: 'setAnnounce', value: $('announce').checked })
     $('scheduleForm').onsubmit = (event) => {
         event.preventDefault()
         if (state?.room.startsAt) {
@@ -289,8 +291,14 @@ async function home() {
         return
     }
     $('rows').prepend(...discover.shelves.filter(s => s.items.length).map(s => shelf(s.title, async () => s.items)))
-    const resume = await api('/api/resume').catch(() => [])
-    if (resume.length && token === browseToken) {
+    const [resume, saved] = await Promise.all([api('/api/resume').catch(() => []), loadWatchlist()])
+    if (token !== browseToken) {
+        return
+    }
+    if (saved.length) {
+        $('rows').prepend(shelf('Watchlist', async () => saved))
+    }
+    if (resume.length) {
         $('rows').prepend(shelf('Continue watching', async () => resume))
     }
     const featured = discover.shelves[0]?.items[0] ?? (await api(`/api/latest?parent=${encodeURIComponent(views[0]?.id ?? '')}`).catch(() => []))[0]
@@ -337,6 +345,10 @@ function actions(d) {
             addItem(d.id)
             e.target.textContent = '✓ Added'
         }),
+        button(onWatchlist.has(d.id) ? '★ On watchlist' : '☆ Watchlist', async (e) => {
+            await toggleWatchlist(d.id)
+            e.target.textContent = onWatchlist.has(d.id) ? '★ On watchlist' : '☆ Watchlist'
+        }, { title: 'The shared “we should watch this” list' }),
         button('+ Add to vote', (e) => {
             if (!voteDraft.some(o => o.id === d.id) && voteDraft.length < 4) {
                 voteDraft.push({ id: d.id, name: d.name })
@@ -346,6 +358,52 @@ function actions(d) {
         }, { disabled: voteDraft.length >= 4 && !voteDraft.some(o => o.id === d.id) }),
     )
     return row
+}
+
+// --- the shared watchlist and guests' suggestions ---
+
+const onWatchlist = new Set()
+
+async function loadWatchlist() {
+    const list = await api('/api/watchlist').catch(() => [])
+    onWatchlist.clear()
+    list.forEach(e => onWatchlist.add(e.id))
+    return list
+}
+
+async function toggleWatchlist(id) {
+    if (onWatchlist.has(id)) {
+        await api(`/api/watchlist/${encodeURIComponent(id)}`, { method: 'DELETE' })
+        onWatchlist.delete(id)
+    } else {
+        await postJson('/api/watchlist', { id })
+        onWatchlist.add(id)
+    }
+}
+
+function renderSuggestions(suggestions) {
+    $('suggestPanel').hidden = suggestions.length === 0
+    const dismiss = (id) => socket.send({ type: 'dismissSuggestion', itemId: id })
+    $('suggestions').replaceChildren(...suggestions.toReversed().map(s => li(`${s.name} · ${s.by}`,
+        button('+', () => {
+            addItem(s.id)
+            dismiss(s.id)
+        }, { title: 'Add to the queue', className: 'primary' }),
+        button('🗳', () => {
+            if (!voteDraft.some(o => o.id === s.id) && voteDraft.length < 4) {
+                voteDraft.push({ id: s.id, name: s.name })
+            }
+            dismiss(s.id)
+            renderVote()
+        }, { title: 'Add to the vote', disabled: voteDraft.length >= 4 }),
+        button('☆', async () => {
+            if (!onWatchlist.has(s.id)) {
+                await toggleWatchlist(s.id)
+            }
+            dismiss(s.id)
+        }, { title: 'Save to the watchlist' }),
+        button('✕', () => dismiss(s.id), { title: 'Dismiss' }),
+    )))
 }
 
 // --- votes: the host picks 2–4 titles, guests vote in the player, the winner plays next ---
@@ -612,6 +670,8 @@ function render() {
     $('guestControl').checked = room.guestControl
     $('autoContinue').checked = room.autoContinue
     $('autoSkip').checked = room.autoSkip
+    $('announce').checked = room.announce
+    renderSuggestions(room.suggestions)
     $('startsAt').disabled = Boolean(room.startsAt)
     $('saveSchedule').textContent = room.startsAt ? 'Cancel' : 'Schedule'
     if (room.startsAt) {

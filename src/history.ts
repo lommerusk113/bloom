@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { loadJson, saveJson } from './store.ts'
 
 /** One item watched in one room: who hosted, who watched, and for how long it actually played. */
 export type Watched = { at: number; itemId: string; item: string; room: string; host: string; viewers: string[]; seconds: number }
@@ -13,14 +13,7 @@ const DAY_MS = 24 * 3600_000
 export function createHistory(dir: string) {
 
     const file = join(dir, 'history.json')
-    let entries: Watched[] = []
-    try {
-        entries = JSON.parse(readFileSync(file, 'utf8'))
-    } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            throw new Error(`Cannot read ${file}: ${(err as Error).message}`)
-        }
-    }
+    const entries = loadJson<Watched[]>(file, [])
 
     return {
         add(entry: Watched): void {
@@ -29,9 +22,7 @@ export function createHistory(dir: string) {
             }
             entries.push(entry)
             entries.splice(0, entries.length - MAX_ENTRIES)
-            mkdirSync(dir, { recursive: true })
-            writeFileSync(`${file}.tmp`, JSON.stringify(entries), { mode: 0o600 })
-            renameSync(`${file}.tmp`, file)
+            saveJson(file, entries)
         },
 
         /** The latest entries and totals for the last 30 days. */

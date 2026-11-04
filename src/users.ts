@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage } from 'node:http'
 import { join } from 'node:path'
 import { createLimiter, digest, MAX_AGE_S, parseCookies, sessionCookie } from './auth.ts'
+import { loadJson, saveJson } from './store.ts'
 
 const COOKIE = 'bloom_session'
 
@@ -19,20 +19,8 @@ export function createUsers(dir: string, secure: boolean, authenticate: (name: s
 
     const file = join(dir, 'sessions.json')
     const limiter = createLimiter()
-    let data: { sessions: Record<string, Session>; lastLogin: Record<string, number> } = { sessions: {}, lastLogin: {} }
-    try {
-        data = JSON.parse(readFileSync(file, 'utf8'))
-    } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            throw new Error(`Cannot read ${file}: ${(err as Error).message}`)
-        }
-    }
-
-    function save(): void {
-        mkdirSync(dir, { recursive: true })
-        writeFileSync(`${file}.tmp`, JSON.stringify(data, null, 2), { mode: 0o600 })
-        renameSync(`${file}.tmp`, file)
-    }
+    const data = loadJson<{ sessions: Record<string, Session>; lastLogin: Record<string, number> }>(file, { sessions: {}, lastLogin: {} })
+    const save = () => saveJson(file, data)
 
     return {
         /** When each Jellyfin user last logged in to Bloom. */

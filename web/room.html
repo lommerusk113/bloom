@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bloom</title>
 <link rel="icon" href="/web/logo.svg" type="image/svg+xml">
+<link rel="manifest" href="/web/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/web/apple-touch-icon.png">
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bloom">
 <link rel="stylesheet" href="/web/style.css">
 <script src="/vendor/hls.min.js"></script>
 <script>window.__onGCastApiAvailable = (available) => { window.__castAvailable = available }</script>
@@ -116,9 +122,14 @@
     <aside id="chat" class="chat" hidden aria-label="Chat">
         <header class="chat-head">
             <strong>Chat</strong>
+            <button id="suggestButton" class="link" type="button" title="Suggest something to watch">💡 Suggest a title</button>
             <button id="chatClose" class="icon" title="Close chat" aria-label="Close chat">✕</button>
         </header>
         <ol id="chatLog" class="chat-log" aria-live="polite"></ol>
+        <div id="suggestPicker" class="gif-picker" hidden>
+            <input id="suggestSearch" type="search" placeholder="Search the library" aria-label="Search the library">
+            <ul id="suggestResults" class="suggest-results"></ul>
+        </div>
         <div id="gifPicker" class="gif-picker" hidden>
             <input id="gifSearch" type="search" placeholder="Search GIPHY" aria-label="Search GIFs">
             <div id="gifResults" class="gif-results"></div>

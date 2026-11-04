@@ -11,6 +11,7 @@ services:
       JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
       GIPHY_API_KEY: ${GIPHY_API_KEY:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
     # localhost only: reach it through your reverse proxy
     ports:
       - "127.0.0.1:8080:8080"

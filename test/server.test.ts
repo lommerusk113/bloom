@@ -207,6 +207,29 @@ test('the host sees who did what, everyone sees reactions, and the host can remo
     host.close()
 })
 
+test('guests suggest titles and accounts share a watchlist', async () => {
+    const cookie = await login('alice', 'secret1')
+    const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }
+    const guest = openSocket(id)
+    await guest.ready
+    guest.send({ type: 'hello', name: 'Bob' })
+    guest.send({ type: 'suggest', itemId: MOVIE })
+    const state = await guest.next(m => m.type === 'state' && m.room.suggestions.length > 0)
+    assert.deepEqual(state.room.suggestions, [{ id: MOVIE, name: 'Movie', by: 'Bob' }])
+    assert.equal((await guest.next(m => m.type === 'chat')).message.text, '💡 suggested Movie')
+    guest.close()
+
+    const json = { cookie, 'content-type': 'application/json' }
+    await fetch(`${BASE}/api/watchlist`, { method: 'POST', headers: json, body: JSON.stringify({ id: MOVIE }) })
+    await fetch(`${BASE}/api/watchlist`, { method: 'POST', headers: json, body: JSON.stringify({ id: MOVIE }) }) // once only
+    const other = await login('bob', 'secret1')
+    const list = (await (await fetch(`${BASE}/api/watchlist`, { headers: { cookie: other } })).json()) as Array<{ id: string; addedBy: string }>
+    assert.deepEqual(list.map(e => [e.id, e.addedBy]), [[MOVIE, 'alice']])
+    await fetch(`${BASE}/api/watchlist/${MOVIE}`, { method: 'DELETE', headers: { cookie: other } })
+    assert.deepEqual(await (await fetch(`${BASE}/api/watchlist`, { headers: { cookie } })).json(), [])
+    assert.equal((await fetch(`${BASE}/api/watchlist`)).status, 403)
+})
+
 test('an oversized websocket frame drops only that client', async () => {
     const cookie = await login()
     const { id } = (await (await fetch(`${BASE}/api/rooms`, { method: 'POST', headers: { cookie } })).json()) as { id: string }

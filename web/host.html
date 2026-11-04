@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bloom</title>
 <link rel="icon" href="/web/logo.svg" type="image/svg+xml">
+<link rel="manifest" href="/web/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/web/apple-touch-icon.png">
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bloom">
 <link rel="stylesheet" href="/web/style.css">
 </head>
 <body>
@@ -98,11 +104,16 @@
                     <label class="check"><input id="guestControl" type="checkbox"> Guests may pause, seek and skip</label>
                     <label class="check"><input id="autoContinue" type="checkbox"> Auto-continue shows with the next episode</label>
                     <label class="check"><input id="autoSkip" type="checkbox"> Auto-skip intros</label>
+                    <label id="announceRow" class="check" hidden><input id="announce" type="checkbox"> Announce on Discord</label>
                     <form id="scheduleForm" class="row">
                         <input id="startsAt" type="datetime-local" aria-label="Scheduled start">
                         <button id="saveSchedule">Schedule</button>
                     </form>
                     <p id="scheduleNote" class="muted small"></p>
+                </div>
+                <div id="suggestPanel" class="panel" hidden>
+                    <h2>Suggestions</h2>
+                    <ol id="suggestions" class="list"></ol>
                 </div>
                 <div id="votePanel" class="panel" hidden>
                     <h2>Vote</h2>

@@ -169,6 +169,8 @@ test('a scheduled room starts by itself and is kept while it waits', () => {
     sweepRooms(rooms, () => 0, emptySince, 0)
     sweepRooms(rooms, () => 0, emptySince, ROOM_TTL_MS * 2) // empty, but its start is still ahead
     assert.equal(rooms.has('r1'), true)
-    const { advanced } = sweepRooms(rooms, () => 0, emptySince, ROOM_TTL_MS * 3)
+    sweepRooms(rooms, () => 0, emptySince, ROOM_TTL_MS * 3) // start time, but nobody is there: it waits
+    assert.deepEqual([room.playing, rooms.has('r1')], [false, true])
+    const { advanced } = sweepRooms(rooms, () => 1, emptySince, ROOM_TTL_MS * 3 + 1000)
     assert.deepEqual([advanced.length, room.playing, room.startsAt], [1, true, null])
 })

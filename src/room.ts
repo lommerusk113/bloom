@@ -22,6 +22,10 @@ export type Room = {
     autoSkip: boolean
     /** A scheduled start: the room starts playing by itself then, and isn't closed while empty before it. */
     startsAt: number | null
+    /** Post to the server's Discord channel when the room opens, is scheduled, and starts something. */
+    announce: boolean
+    /** Titles guests suggested from the player, newest last, for the host to queue, vote on or dismiss. */
+    suggestions: Array<{ id: string; name: string; by: string }>
 }
 
 export type Vote = { options: Array<{ id: string; name: string }>; ballots: Record<string, number>; endsAt: number }
@@ -38,14 +42,17 @@ export type Command =
     | { type: 'setGuestControl'; value: boolean }
     | { type: 'setAutoContinue'; value: boolean }
     | { type: 'setAutoSkip'; value: boolean }
+    | { type: 'setAnnounce'; value: boolean }
     | { type: 'schedule'; at: number | null }
 
 export const ROOM_TTL_MS = 5 * 60_000
 export const MAX_SCHEDULE_MS = 30 * 24 * 3600_000
-const HOST_ONLY: ReadonlySet<Command['type']> = new Set(['queueAdd', 'queueRemove', 'queueMove', 'setGuestControl', 'setAutoContinue', 'setAutoSkip', 'schedule'])
+/** How long a scheduled room waits for someone to show up past its start time before it gives up. */
+export const SCHEDULE_GRACE_MS = 3600_000
+const HOST_ONLY: ReadonlySet<Command['type']> = new Set(['queueAdd', 'queueRemove', 'queueMove', 'setGuestControl', 'setAutoContinue', 'setAutoSkip', 'setAnnounce', 'schedule'])
 
 export function createRoom(id: string, now: number, owner = '', name = 'Room'): Room {
-    return { id, name, owner, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true, waiting: false, vote: null, autoContinue: true, autoSkip: false, startsAt: null }
+    return { id, name, owner, queue: [], index: 0, playing: false, position: 0, updatedAt: now, guestControl: true, waiting: false, vote: null, autoContinue: true, autoSkip: false, startsAt: null, announce: false, suggestions: [] }
 }
 
 export function currentPosition(room: Room, now: number): number {
@@ -98,6 +105,9 @@ export function apply(room: Room, cmd: Command, isHost: boolean, now: number): b
         case 'setAutoSkip':
             room.autoSkip = cmd.value
             return true
+        case 'setAnnounce':
+            room.announce = cmd.value
+            return true
         case 'schedule':
             if (cmd.at !== null && (cmd.at <= now || cmd.at > now + MAX_SCHEDULE_MS)) {
                 return false
@@ -133,6 +143,8 @@ export function describe(room: Room, cmd: Command): string {
             return cmd.value ? 'turned on auto-continue' : 'turned off auto-continue'
         case 'setAutoSkip':
             return cmd.value ? 'turned on auto-skip intros' : 'turned off auto-skip intros'
+        case 'setAnnounce':
+            return cmd.value ? 'turned on Discord announcements' : 'turned off Discord announcements'
         case 'schedule':
             return cmd.at === null ? 'cancelled the scheduled start' : 'scheduled a start time'
     }
@@ -201,10 +213,14 @@ export function sweepRooms(
         if (advanceIfEnded(room, now)) {
             advanced.push(room)
         }
-        if (startIfScheduled(room, now)) {
+        const present = viewerCount(room.id) > 0
+        // a scheduled start only plays for someone: an empty room waits, then gives up
+        if (present && startIfScheduled(room, now)) {
             advanced.push(room)
+        } else if (room.startsAt !== null && now - room.startsAt > SCHEDULE_GRACE_MS) {
+            room.startsAt = null
         }
-        const idle = viewerCount(room.id) === 0 && !(room.startsAt !== null && room.startsAt > now)
+        const idle = !present && room.startsAt === null
         if (!idle) {
             emptySince.delete(room.id)
             continue
@@ -247,6 +263,7 @@ export function parseCommand(input: unknown): Command | null {
         case 'setGuestControl':
         case 'setAutoContinue':
         case 'setAutoSkip':
+        case 'setAnnounce':
             return typeof c.value === 'boolean' ? { type: c.type, value: c.value } : null
         case 'schedule':
             return c.at === null || finite(c.at) ? { type: 'schedule', at: c.at as number | null } : null
